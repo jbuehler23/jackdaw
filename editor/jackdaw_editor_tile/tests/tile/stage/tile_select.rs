@@ -18,7 +18,7 @@ use jackdaw_editor_tile::tile_select::{TileArea, TileSelection, TileSelectionInp
 use jackdaw_editor_tile::tile_stamp::{StampBrush, TileStamp};
 use jackdaw_editor_tile::tile_tools::{BrushSource, TileEditMode, TileStrokeState, TileTool};
 use jackdaw_input::ContextActivity;
-use jackdaw_scene_types::{PropertyValue, Tilemap, TilemapLayerKind};
+use jackdaw_scene_types::{LayerTerrainMatch, PropertyValue, Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{CellCoord, TileRef};
 
 const SELECT: &str = "tilemap.select";
@@ -40,7 +40,7 @@ fn select(app: &mut App, from: (i32, i32), to: (i32, i32)) {
 }
 
 fn tile(app: &mut App, map: Entity, x: i32, y: i32) -> TileRef {
-    stored(app, map).layers[0].tiles.get(cell(x, y))
+    stored(app, map).layers[&0].tiles.get(cell(x, y))
 }
 
 #[track_caller]
@@ -145,7 +145,7 @@ fn erasing_a_terrain_selection_clears_terrain_and_hand_placed_tiles() {
 
     run(&mut app, ERASE);
     let data = stored(&mut app, map);
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     for y in 1..=3 {
         for x in 1..=3 {
             assert_eq!(authoring.terrain.get(cell(x, y)), 0, "{x},{y}");
@@ -220,7 +220,7 @@ fn cutting_copies_and_erases_as_one_entry() {
     let (before, count) = (bytes(&mut app, map), entries(&app));
 
     run(&mut app, CUT);
-    assert_eq!(stored(&mut app, map).layers[0].tiles.cells().count(), 0);
+    assert_eq!(stored(&mut app, map).layers[&0].tiles.cells().count(), 0);
     let stamp = app.world().resource::<StampBrush>().stamp.clone();
     assert_eq!(stamp.map(|s| s.cells[0]), Some((UVec2::ZERO, a)));
     assert_undo_redo(&mut app, map, &before, count);
@@ -339,8 +339,8 @@ fn a_refused_cut_leaves_the_brush_alone() {
     let (map, _) = three_tiles(&mut app);
     (app.world_mut().get_mut::<Tilemap>(map))
         .expect("the map")
-        .layers
-        .push(layer(TilemapLayerKind::Tile, default()));
+        .layers[0] = layer(TilemapLayerKind::Terrain, LayerTerrainMatch::Auto);
+    settle(&mut app);
     let (before, count) = (bytes(&mut app, map), entries(&app));
     let (source, tool) = (
         brush(&app).source,
@@ -360,7 +360,7 @@ fn a_refused_cut_leaves_the_brush_alone() {
 fn the_selection_operators_wait_for_their_layer() {
     let (mut app, _dir) = project_app();
     let mut data = tile_layer(&[(0, 0, TileRef::new(3))]);
-    data.layers.push(data.layers[0].clone());
+    data.layers.insert(1, data.layers[&0].clone());
     let ground = || layer(TilemapLayerKind::Tile, default());
     let map = spawn_map(&mut app, vec![ground(), ground()], data);
     enter(&mut app, map);

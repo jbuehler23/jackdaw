@@ -4363,6 +4363,8 @@ dependencies = [
  "jackdaw_runtime",
  "jackdaw_scene_types",
  "jackdaw_terrain",
+ "jackdaw_tilemap",
+ "jackdaw_tileset",
  "tempfile",
 ]
 

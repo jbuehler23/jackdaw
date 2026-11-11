@@ -374,14 +374,14 @@ pub(crate) fn tilemap_selection_copy(
 fn selected_stamp(world: &mut World) -> Result<(TileStamp, AssetId<Tileset>), String> {
     let area = (world.resource::<TileSelection>().area).ok_or("no cells are selected")?;
     let cells = area.cells()?;
-    let path = (world.get::<Tilemap>(area.map))
+    let (path, id) = (world.get::<Tilemap>(area.map))
         .and_then(|map| map.layers.get(area.layer))
-        .map(|layer| layer.tileset.clone())
+        .map(|layer| (layer.tileset.clone(), layer.id))
         .ok_or("the selected layer is gone")?;
     let tileset = crate::tileset_dock::tileset_id(world, &path)?;
     let key = store_key_of(world, area.map).ok_or("the map's cells are not loaded")?;
     let store = world.resource::<TilemapDataStore>();
-    let layer = (store.get(&key)).and_then(|data| data.layers.get(area.layer));
+    let layer = (store.get(&key)).and_then(|data| data.layers.get(&id));
     let top_left = IVec2::new(area.min.0.x, area.max.0.y);
     let tiles: Vec<(UVec2, TileRef)> = (cells.into_iter())
         .map(|cell| {

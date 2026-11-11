@@ -215,6 +215,24 @@ pub struct TilesetCollision {
     pub polygons: Vec<Vec<Vec2>>,
 }
 
+impl jackdaw_tilemap::CollisionShape for TilesetCollision {
+    fn layer(&self) -> u32 {
+        self.layer
+    }
+
+    fn trigger(&self) -> bool {
+        self.trigger
+    }
+
+    fn one_way(&self) -> bool {
+        self.one_way
+    }
+
+    fn polygons(&self) -> &[Vec<Vec2>] {
+        &self.polygons
+    }
+}
+
 /// What a collision shape was made from.
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[reflect(Default)]

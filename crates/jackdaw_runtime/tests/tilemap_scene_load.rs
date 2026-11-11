@@ -14,14 +14,14 @@ use bevy::sprite_render::{
 };
 use jackdaw_runtime::{
     JackdawCatalogPath, JackdawPlugin, JackdawScene, JackdawSceneRoot, RuntimeOnly, TilemapChunkOf,
-    TilemapSidecarMissing,
+    TilemapCollision, TilemapSidecarMissing,
 };
 use jackdaw_scene_types::Tilemap;
 use jackdaw_tilemap::{
     CellCoord, ChunkCoord, ChunkedLayer, LayerData, LayerKind, Placement, TileRef, TilemapData,
 };
-use jackdaw_tileset::Tileset;
 use jackdaw_tileset::chunk::{ChunkDraw, TileLayout, TilemapEdgePiece, chunk_transform, tile_data};
+use jackdaw_tileset::{CollisionPreset, Tileset, TilesetCollision};
 
 const SHEET: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -46,6 +46,10 @@ jackdaw_tileset::Tileset {
 }
 ";
 
+/// The ids `map_text` gives its layers, Ground below Decor.
+const GROUND: u32 = 3;
+const DECOR: u32 = 1;
+
 fn map_text(name: &str, data_path: &str) -> String {
     map_text_with(name, data_path, "overworld.tileset.bsn")
 }
@@ -56,9 +60,10 @@ fn map_text_with(name: &str, data_path: &str, tileset: &str) -> String {
          jackdaw_scene_types::tilemap::Tilemap {{\n    \
          data_path: \"{data_path}\",\n    \
          layers: [\n        \
-         jackdaw_scene_types::tilemap::TilemapLayer {{ name: \"Ground\", tileset: \"{tileset}\", kind: jackdaw_scene_types::tilemap::TilemapLayerKind::Tile }},\n        \
-         jackdaw_scene_types::tilemap::TilemapLayer {{ name: \"Decor\", tileset: \"{tileset}\", kind: jackdaw_scene_types::tilemap::TilemapLayerKind::Tile }},\n    \
-         ],\n\
+         jackdaw_scene_types::tilemap::TilemapLayer {{ id: {GROUND}, name: \"Ground\", tileset: \"{tileset}\", kind: jackdaw_scene_types::tilemap::TilemapLayerKind::Tile }},\n        \
+         jackdaw_scene_types::tilemap::TilemapLayer {{ id: {DECOR}, name: \"Decor\", tileset: \"{tileset}\", kind: jackdaw_scene_types::tilemap::TilemapLayerKind::Tile }},\n    \
+         ],\n    \
+         next_layer_id: 4,\n\
          }}\n"
     )
 }
@@ -79,15 +84,19 @@ fn layer(cells: &[(i32, i32, TileRef)]) -> LayerData {
 /// Two layers: ground across two chunks, one of them at negative cells, and
 /// a flipped decor tile.
 fn painted() -> TilemapData {
+    ground_and_decor(
+        layer(&[
+            (0, 0, TileRef::new(3)),
+            (5, 7, TileRef::from_raw(40, 0b011)),
+            (-1, -1, TileRef::new(100)),
+        ]),
+        layer(&[(2, 2, TileRef::from_raw(7, 0b100))]),
+    )
+}
+
+fn ground_and_decor(ground: LayerData, decor: LayerData) -> TilemapData {
     TilemapData {
-        layers: vec![
-            layer(&[
-                (0, 0, TileRef::new(3)),
-                (5, 7, TileRef::from_raw(40, 0b011)),
-                (-1, -1, TileRef::new(100)),
-            ]),
-            layer(&[(2, 2, TileRef::from_raw(7, 0b100))]),
-        ],
+        layers: [(GROUND, ground), (DECOR, decor)].into(),
     }
 }
 
@@ -121,6 +130,16 @@ fn write_sidecar(path: &Path, data: &TilemapData) {
 }
 
 fn game(assets_root: &Path, scene: &str) -> App {
+    let mut app = headless(assets_root);
+    // What a windowed game gets from its sprite plugins.
+    app.init_asset::<Mesh>()
+        .init_asset::<Image>()
+        .init_asset::<TilemapChunkMaterial>()
+        .init_resource::<TilemapChunkMeshCache>();
+    load(app, scene)
+}
+
+fn headless(assets_root: &Path) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::transform::TransformPlugin);
@@ -128,12 +147,11 @@ fn game(assets_root: &Path, scene: &str) -> App {
         file_path: assets_root.to_string_lossy().into_owned(),
         ..default()
     });
-    // What a windowed game gets from its sprite plugins.
-    app.init_asset::<Mesh>()
-        .init_asset::<Image>()
-        .init_asset::<TilemapChunkMaterial>()
-        .init_resource::<TilemapChunkMeshCache>();
     app.insert_resource(JackdawCatalogPath(assets_root.join("catalog.bsn")));
+    app
+}
+
+fn load(mut app: App, scene: &str) -> App {
     app.add_plugins(JackdawPlugin);
     let handle = app
         .world_mut()
@@ -233,8 +251,8 @@ fn a_painted_map_draws_the_chunks_the_editor_builds() {
     let tile_size = UVec2::splat(16);
 
     let mut expected = Vec::new();
-    for (index, layer) in data.layers.iter().enumerate() {
-        for (coord, cells) in layer.tiles.chunks() {
+    for (index, id) in [GROUND, DECOR].into_iter().enumerate() {
+        for (coord, cells) in data.layers[&id].tiles.chunks() {
             expected.push((index, coord.0, cells));
         }
     }
@@ -292,9 +310,7 @@ fn tiles_between_cells_draw_half_a_tile_up_and_crop_at_the_bounds() {
     let assets = project.path().join("assets");
     let mut between = layer(&[(-1, 0, TileRef::new(3)), (0, 0, TileRef::new(4))]);
     between.placement = Placement::BetweenCells;
-    let data = TilemapData {
-        layers: vec![layer(&[(0, 0, TileRef::new(3))]), between],
-    };
+    let data = ground_and_decor(layer(&[(0, 0, TileRef::new(3))]), between);
     write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &data);
     let mut app = game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"));
     let map = map_named(&mut app, "Map");
@@ -398,15 +414,17 @@ fn terrain_map_text(name: &str, data_path: &str, tileset: &str) -> String {
 }
 
 #[test]
-fn an_old_sidecar_of_a_corner_layer_draws_between_cells_without_a_save() {
+fn a_corner_layer_stored_on_cells_draws_between_cells_without_a_save() {
     let project = project();
     let assets = project.path().join("assets");
     std::fs::write(assets.join("corners.tileset.bsn"), CORNER_TILESET).expect("tileset");
-    let mut old = layer(&[(0, 0, TileRef::new(3))]);
-    old.kind = LayerKind::Terrain;
-    let data = TilemapData { layers: vec![old] };
+    let mut on_cells = layer(&[(0, 0, TileRef::new(3))]);
+    on_cells.kind = LayerKind::Terrain;
+    let data = TilemapData {
+        layers: [(0, on_cells)].into(),
+    };
     let bytes = jackdaw_tilemap::encode(&data);
-    assert_eq!(bytes[17], 0, "written before tiles sat between cells");
+    assert_eq!(bytes[21], 0, "stored as tiles on cells");
     write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &data);
     let scene = terrain_map_text("Map", "zone.tilemap-0.jdtiles", "corners.tileset.bsn");
     let mut app = game(&assets, &scene);
@@ -447,9 +465,7 @@ fn a_prefab_instanced_map_reads_the_prefab_sidecar() {
     );
     std::fs::create_dir_all(assets.join("prefabs")).expect("prefabs");
     std::fs::write(assets.join("prefabs/hut.bsn"), prefab).expect("prefab");
-    let inherited = TilemapData {
-        layers: vec![layer(&[(1, 1, TileRef::new(9))]), layer(&[])],
-    };
+    let inherited = ground_and_decor(layer(&[(1, 1, TileRef::new(9))]), layer(&[]));
     write_sidecar(&assets.join("prefabs/hut.tilemap-0.jdtiles"), &inherited);
     write_sidecar(&assets.join("hut.tilemap-0.jdtiles"), &painted());
 
@@ -484,24 +500,19 @@ fn a_tileset_without_an_image_skips_its_layers_with_a_warning() {
 }
 
 #[test]
-fn a_sidecar_with_fewer_layers_draws_the_ones_that_line_up() {
+fn a_sidecar_layer_draws_at_the_place_its_id_holds_in_the_list() {
     let project = project();
     let assets = project.path().join("assets");
-    let one = TilemapData {
-        layers: vec![layer(&[(0, 0, TileRef::new(3))])],
+    let only_decor = TilemapData {
+        layers: [(DECOR, layer(&[(0, 0, TileRef::new(3))]))].into(),
     };
-    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &one);
-    let (mut app, logged) =
-        warnings_of(|| game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles")));
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &only_decor);
+    let mut app = game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"));
 
     let map = map_named(&mut app, "Map");
     let drawn = chunks_of(&mut app, map);
     assert_eq!(drawn.len(), 1);
-    assert_eq!((drawn[0].0, drawn[0].1), (0, IVec2::ZERO));
-    assert!(
-        logged.contains("Tilemap Map: its sidecar holds 1 layers and the map names 2"),
-        "the map is named: {logged}"
-    );
+    assert_eq!((drawn[0].0, drawn[0].1), (1, IVec2::ZERO));
 }
 
 #[test]
@@ -570,4 +581,221 @@ fn a_tileset_edit_or_swap_draws_the_map_again() {
     assert_eq!(path(&drawn[1].2.tileset).as_deref(), Some("other.png"));
     assert_ne!(drawn[1].2.tileset, before);
     assert_eq!(path(&drawn[2].2.tileset).as_deref(), Some("overworld.png"));
+}
+
+const SOLID: u16 = 1;
+const TOP_HALF: u16 = 2;
+const SLOPE_UP: u16 = 3;
+const TRIGGER: u16 = 4;
+
+/// A run of solid ground with a half tile, a slope and a trigger beside it,
+/// one more solid tile a chunk to the right, and a decor layer of tiles
+/// without collision.
+fn colliding() -> TilemapData {
+    let mut ground: Vec<_> = (0..4).map(|x| (x, 0, TileRef::new(SOLID))).collect();
+    ground.extend([
+        (4, 0, TileRef::new(TOP_HALF)),
+        (5, 0, TileRef::new(SLOPE_UP)),
+        (8, 0, TileRef::new(TRIGGER)),
+        (40, 0, TileRef::new(SOLID)),
+    ]);
+    ground_and_decor(layer(&ground), layer(&[(2, 2, TileRef::new(7))]))
+}
+
+/// Gives tiles `SOLID` to `TRIGGER` their shapes, the trigger on physics
+/// layer 1.
+fn give_shapes(app: &mut App) {
+    let shapes = [
+        (SOLID, CollisionPreset::Solid, 0, false),
+        (TOP_HALF, CollisionPreset::TopHalf, 0, false),
+        (SLOPE_UP, CollisionPreset::SlopeUp, 0, false),
+        (TRIGGER, CollisionPreset::Solid, 1, true),
+    ];
+    let mut assets = app.world_mut().resource_mut::<Assets<Tileset>>();
+    let (_, tileset) = (assets.iter_mut())
+        .find(|(_, tileset)| tileset.image == "overworld.png")
+        .expect("the tileset loaded");
+    for (tile, preset, layer, trigger) in shapes {
+        let shape = TilesetCollision {
+            layer,
+            trigger,
+            one_way: false,
+            preset,
+            polygons: preset.polygons().expect("a preset shape"),
+        };
+        tileset
+            .set_collision(0, u32::from(tile), shape)
+            .expect("a tile of the sheet");
+    }
+    app.update();
+    app.update();
+}
+
+fn colliding_game(assets: &Path, scene: &str, renders: bool) -> App {
+    let mut app = if renders {
+        let mut app = headless(assets);
+        app.init_asset::<Mesh>()
+            .init_asset::<Image>()
+            .init_asset::<TilemapChunkMaterial>()
+            .init_resource::<TilemapChunkMeshCache>();
+        app
+    } else {
+        headless(assets)
+    };
+    app.register_required_components::<Tilemap, TilemapCollision>();
+    let mut app = load(app, scene);
+    give_shapes(&mut app);
+    app
+}
+
+fn collision_of(app: &App, map: Entity) -> TilemapCollision {
+    app.world()
+        .get::<TilemapCollision>(map)
+        .expect("the map's collision")
+        .clone()
+}
+
+fn assert_painted_collision(collision: &TilemapCollision) {
+    let mut keys: Vec<_> = collision
+        .chunks
+        .keys()
+        .map(|(l, c)| (*l, c.0.x, c.0.y))
+        .collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec![(0, 0, 0), (0, 1, 0)],
+        "the decor layer has no shapes"
+    );
+
+    let ground = &collision.chunks[&(0, ChunkCoord::new(0, 0))];
+    assert_eq!(
+        (ground.origin, ground.tile_size),
+        (Vec2::ZERO, Vec2::splat(16.0))
+    );
+    let kinds: Vec<_> = ground.groups.iter().map(|g| (g.layer, g.trigger)).collect();
+    assert_eq!(kinds, vec![(0, false), (1, true)]);
+    let solid = &ground.groups[0];
+    assert_eq!(
+        solid.boxes,
+        vec![[Vec2::ZERO, Vec2::new(4.0, 1.0)]],
+        "one merged run"
+    );
+    assert_eq!(solid.polygons.len(), 2, "the half tile and the slope");
+    assert!(solid.polygons[0].contains(&Vec2::new(4.0, 0.5)));
+    assert!(solid.polygons[1].contains(&Vec2::new(6.0, 1.0)));
+    assert_eq!(
+        ground.groups[1].boxes,
+        vec![[Vec2::new(8.0, 0.0), Vec2::new(9.0, 1.0)]]
+    );
+
+    let right = &collision.chunks[&(0, ChunkCoord::new(1, 0))];
+    assert_eq!(right.origin, Vec2::new(512.0, 0.0));
+    assert_eq!(
+        right.groups[0].boxes,
+        vec![[Vec2::new(8.0, 0.0), Vec2::new(9.0, 1.0)]],
+        "cell (40, 0), in tiles from the chunk's corner"
+    );
+}
+
+#[test]
+fn a_map_that_collides_gets_its_tiles_shapes_by_chunk() {
+    let project = project();
+    let assets = project.path().join("assets");
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &colliding());
+    let mut app = colliding_game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"), true);
+    let map = map_named(&mut app, "Map");
+
+    assert_painted_collision(&collision_of(&app, map));
+    assert_eq!(chunks_of(&mut app, map).len(), 3, "and it still draws");
+}
+
+#[test]
+fn a_headless_game_builds_collision_without_drawing() {
+    let project = project();
+    let assets = project.path().join("assets");
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &colliding());
+    let mut app = colliding_game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"), false);
+    let map = map_named(&mut app, "Map");
+
+    assert_painted_collision(&collision_of(&app, map));
+    assert!(chunks_of(&mut app, map).is_empty());
+}
+
+#[test]
+fn a_map_without_collision_builds_none() {
+    let project = project();
+    let assets = project.path().join("assets");
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &colliding());
+    let mut app = game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"));
+    give_shapes(&mut app);
+    let map = map_named(&mut app, "Map");
+
+    assert!(app.world().get::<TilemapCollision>(map).is_none());
+}
+
+#[test]
+fn an_edit_changes_the_revision_of_only_the_chunks_it_touched() {
+    let project = project();
+    let assets = project.path().join("assets");
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &colliding());
+    let mut app = colliding_game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"), true);
+    let map = map_named(&mut app, "Map");
+    let before = collision_of(&app, map);
+
+    let mut edited = colliding();
+    edited
+        .layers
+        .get_mut(&GROUND)
+        .expect("the ground layer")
+        .tiles
+        .set(CellCoord::new(4, 0), TileRef::new(SOLID));
+    write_sidecar(&assets.join("zone.tilemap-1.jdtiles"), &edited);
+    app.world_mut()
+        .get_mut::<Tilemap>(map)
+        .expect("the map")
+        .data_path = "zone.tilemap-1.jdtiles".to_string();
+    app.update();
+    app.update();
+    let after = collision_of(&app, map);
+
+    let revision = |c: &TilemapCollision, x| c.chunks[&(0, ChunkCoord::new(x, 0))].revision;
+    assert_ne!(
+        revision(&after, 0),
+        revision(&before, 0),
+        "the edited chunk"
+    );
+    assert_eq!(
+        revision(&after, 1),
+        revision(&before, 1),
+        "the chunk left alone"
+    );
+    let solid = &after.chunks[&(0, ChunkCoord::new(0, 0))].groups[0];
+    assert_eq!(
+        solid.boxes,
+        vec![[Vec2::ZERO, Vec2::new(5.0, 1.0)]],
+        "the run grew"
+    );
+    assert_eq!(solid.polygons.len(), 1, "only the slope is left");
+
+    let mut cleared = edited;
+    cleared
+        .layers
+        .get_mut(&GROUND)
+        .expect("the ground layer")
+        .tiles
+        .set(CellCoord::new(40, 0), TileRef::EMPTY);
+    write_sidecar(&assets.join("zone.tilemap-2.jdtiles"), &cleared);
+    app.world_mut()
+        .get_mut::<Tilemap>(map)
+        .expect("the map")
+        .data_path = "zone.tilemap-2.jdtiles".to_string();
+    app.update();
+    app.update();
+    let keys: Vec<_> = collision_of(&app, map).chunks.into_keys().collect();
+    assert_eq!(
+        keys,
+        vec![(0, ChunkCoord::new(0, 0))],
+        "the emptied chunk is gone"
+    );
 }

@@ -32,7 +32,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     id = "tilemap.describe",
     label = "Describe Tilemap",
     description = "Report a tilemap as text: its name, cell size, bounds and painted extent, \
-                   and per layer its index, name, kind, tileset, match mode, terrains and \
+                   and per layer its index, #id, name, kind, tileset, match mode, terrains and \
                    painted cell count.",
     allows_undo = false,
     is_available = crate::tilemap_ops::no_modal,
@@ -58,7 +58,7 @@ pub(crate) fn tilemap_describe(
     is_available = crate::tilemap_ops::no_modal,
     params(
         entity(Entity, doc = "The tilemap; defaults to the selected one."),
-        layer(String, doc = "Layer name or index; defaults to the painted layer, else 0."),
+        layer(String, doc = "Layer name, #id or index; defaults to the painted layer, else 0."),
         x0(i64, doc = "Column of the first corner."),
         y0(i64, doc = "Row of the first corner."),
         x1(i64, doc = "Column of the second corner."),
@@ -89,7 +89,7 @@ pub(crate) fn tilemap_read_region(
     is_available = crate::tilemap_ops::no_modal,
     params(
         entity(Entity, doc = "The tilemap; defaults to the selected one."),
-        layer(String, doc = "Layer name or index; defaults to the painted layer, else 0."),
+        layer(String, doc = "Layer name, #id or index; defaults to the painted layer, else 0."),
         x0(i64, doc = "Column of the top-left cell."),
         y0(i64, doc = "Row of the top-left cell."),
         text(String, doc = "A `legend: {\"g\": \"grass\"}` line, then `rows:` and the rows."),
@@ -122,10 +122,14 @@ fn describe(world: &mut World, params: &OperatorParameters) -> Result<String, St
     let tilemap = (world.get::<Tilemap>(map).cloned()).ok_or("the entity is not a tilemap")?;
     let name = (world.get::<Name>(map)).map_or_else(|| map.to_string(), ToString::to_string);
     let key = store_key_of(world, map).ok_or("the map's cells are not loaded")?;
-    let painted: Vec<Vec<CellCoord>> = (world.resource::<TilemapDataStore>().get(&key))
-        .map(|data| data.layers.iter().map(LayerData::painted_cells).collect())
+    let painted: BTreeMap<u32, Vec<CellCoord>> = (world.resource::<TilemapDataStore>().get(&key))
+        .map(|data| {
+            (data.layers.iter())
+                .map(|(&id, layer)| (id, layer.painted_cells()))
+                .collect()
+        })
         .unwrap_or_default();
-    let extent = (painted.iter().flatten()).fold(None, |extent: Option<(IVec2, IVec2)>, c| {
+    let extent = (painted.values().flatten()).fold(None, |extent: Option<(IVec2, IVec2)>, c| {
         Some(extent.map_or((c.0, c.0), |(lo, hi)| (lo.min(c.0), hi.max(c.0))))
     });
     let bounds = (tilemap.bounds).map_or("unbounded".into(), |b| {
@@ -144,8 +148,8 @@ fn describe(world: &mut World, params: &OperatorParameters) -> Result<String, St
         let kind = if terrain { "terrain" } else { "tile" };
         let _ = write!(
             out,
-            "layer {index} {:?}: {kind}, tileset {:?}",
-            layer.name, layer.tileset
+            "layer {index} #{} {:?}: {kind}, tileset {:?}",
+            layer.id, layer.name, layer.tileset
         );
         if terrain {
             let mode = (MATCHES.iter())
@@ -154,11 +158,11 @@ fn describe(world: &mut World, params: &OperatorParameters) -> Result<String, St
             let _ = write!(out, ", match {mode}");
         }
         let store = world.resource::<TilemapDataStore>();
-        let held = (store.get(&key)).and_then(|data| data.layers.get(index));
+        let held = (store.get(&key)).and_then(|data| data.layers.get(&layer.id));
         if held.is_some_and(|l| l.placement == Placement::BetweenCells) {
             let _ = write!(out, ", tiles between cells");
         }
-        let count = painted.get(index).map_or(0, Vec::len);
+        let count = painted.get(&layer.id).map_or(0, Vec::len);
         let _ = writeln!(out, ", {count} cells painted");
         match with_layer_tileset(world, map, index, |set, _| Ok(names(set, terrain))) {
             Ok(names) => out.push_str(&names),
@@ -265,11 +269,11 @@ fn read(world: &mut World, params: &OperatorParameters) -> Result<String, String
         bounds: tilemap.and_then(|t| t.bounds),
     };
     let store = world.resource::<TilemapDataStore>();
-    if view.tiles && view.terrain_layer && store.resolved_with(&key, target.layer).is_none() {
+    if view.tiles && view.terrain_layer && store.resolved_with(&key, target.id).is_none() {
         refresh_terrain(world);
     }
     let store = world.resource::<TilemapDataStore>();
-    let layer = (store.get(&key)).and_then(|data| data.layers.get(target.layer));
+    let layer = (store.get(&key)).and_then(|data| data.layers.get(&target.id));
     let values: Vec<Shown> = (0..height)
         .flat_map(|row| (0..width).map(move |col| (col, row)))
         .map(|(col, row)| {
@@ -585,7 +589,7 @@ fn write(world: &mut World, params: &OperatorParameters) -> Result<String, Strin
     }
     let key = editable_key(world, target.map)?;
     let store = world.resource::<TilemapDataStore>();
-    let layer = (store.get(&key)).and_then(|data| data.layers.get(target.layer));
+    let layer = (store.get(&key)).and_then(|data| data.layers.get(&target.id));
     let writes = plan(layer, terrain_layer, &parsed.region, &actions, path);
     if writes.is_empty() {
         return Ok("no cell changed".into());

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_commands::CommandHistory;
-use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
+use jackdaw_scene_types::{PropertyValue, Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{
     CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, CellValue, ChunkCoord, ChunkedLayer, LayerData,
     LayerKind, Links, Placement, TerrainAuthoring, TerrainId, TerrainSet, TileRef, TilemapData,
@@ -32,19 +32,19 @@ struct ChunkCells {
     overrides: Vec<(CellCoord, TileRef)>,
 }
 
-/// The part of a map a stroke touched.
+/// The part of a map a stroke touched, by layer id.
 #[derive(Clone)]
 struct MapCells {
     /// Every layer's kind and whether it holds authoring.
-    layers: Vec<(LayerKind, bool)>,
-    chunks: BTreeMap<(usize, ChunkCoord), ChunkCells>,
+    layers: BTreeMap<u32, (LayerKind, bool)>,
+    chunks: BTreeMap<(u32, ChunkCoord), ChunkCells>,
 }
 
 impl MapCells {
-    fn capture(data: &TilemapData, chunks: &BTreeSet<(usize, ChunkCoord)>) -> Self {
+    fn capture(data: &TilemapData, chunks: &BTreeSet<(u32, ChunkCoord)>) -> Self {
         let chunks = (chunks.iter())
-            .map(|&(index, coord)| {
-                let layer = data.layers.get(index);
+            .map(|&(id, coord)| {
+                let layer = data.layers.get(&id);
                 let authoring = layer.and_then(|l| l.authoring.as_ref());
                 let min = coord.min_cell().0;
                 let overrides = (authoring.into_iter()).flat_map(|a| {
@@ -59,12 +59,12 @@ impl MapCells {
                     links: (authoring.and_then(|a| a.links.chunk(coord))).map(|c| Box::new(*c)),
                     overrides: overrides.collect(),
                 };
-                ((index, coord), cells)
+                ((id, coord), cells)
             })
             .collect();
         Self {
             layers: (data.layers.iter())
-                .map(|l| (l.kind, l.authoring.is_some()))
+                .map(|(&id, l)| (id, (l.kind, l.authoring.is_some())))
                 .collect(),
             chunks,
         }
@@ -86,22 +86,22 @@ impl MapCells {
     fn apply(
         &self,
         data: &mut TilemapData,
-        resolved: &BTreeSet<usize>,
-    ) -> BTreeMap<usize, Vec<CellCoord>> {
-        let mut written: BTreeMap<usize, Vec<CellCoord>> = BTreeMap::new();
-        while let Some(&(kind, _)) = self.layers.get(data.layers.len()) {
-            data.layers.push(LayerData {
+        resolved: &BTreeSet<u32>,
+    ) -> BTreeMap<u32, Vec<CellCoord>> {
+        let mut written: BTreeMap<u32, Vec<CellCoord>> = BTreeMap::new();
+        for (&id, &(kind, _)) in &self.layers {
+            data.layers.entry(id).or_insert_with(|| LayerData {
                 kind,
                 placement: Placement::OnCells,
                 tiles: ChunkedLayer::new(),
                 authoring: None,
             });
         }
-        for (&(index, coord), cells) in &self.chunks {
-            let Some(layer) = data.layers.get_mut(index) else {
+        for (&(id, coord), cells) in &self.chunks {
+            let Some(layer) = data.layers.get_mut(&id) else {
                 continue;
             };
-            if !resolved.contains(&index) {
+            if !resolved.contains(&id) {
                 put(&mut layer.tiles, coord, cells.tiles.as_deref());
             }
             let authored =
@@ -110,15 +110,16 @@ impl MapCells {
                 layer.authoring = Some(TerrainAuthoring::default());
             }
             if let Some(authoring) = &mut layer.authoring {
-                let cells_written = written.entry(index).or_default();
+                let cells_written = written.entry(id).or_default();
                 cells_written.extend(put(&mut authoring.terrain, coord, cells.terrain.as_deref()));
                 cells_written.extend(put(&mut authoring.links, coord, cells.links.as_deref()));
                 authoring.overrides.retain(|cell, _| cell.chunk() != coord);
                 authoring.overrides.extend(cells.overrides.iter().copied());
             }
         }
-        data.layers.truncate(self.layers.len());
-        for (layer, &(_, authored)) in data.layers.iter_mut().zip(&self.layers) {
+        data.layers.retain(|id, _| self.layers.contains_key(id));
+        for (id, layer) in &mut data.layers {
+            let authored = self.layers.get(id).is_some_and(|&(_, authored)| authored);
             if !authored {
                 layer.authoring = None;
             } else if layer.authoring.is_none() {
@@ -172,9 +173,9 @@ fn put_cells(world: &mut World, map: u64, label: &str, cells: &MapCells) {
         warn!("{label}: {GONE}");
         return;
     };
-    let resolved: BTreeSet<usize> = (cells.layers.iter().enumerate())
-        .filter(|(layer, (_, authored))| *authored && store.resolved_with(&key, *layer).is_some())
-        .map(|(layer, _)| layer)
+    let resolved: BTreeSet<u32> = (cells.layers.iter())
+        .filter(|&(&id, &(_, authored))| authored && store.resolved_with(&key, id).is_some())
+        .map(|(&id, _)| id)
         .collect();
     if let Some(mut edit) = store.get_mut(&key) {
         for (layer, cells) in cells.apply(&mut edit, &resolved) {
@@ -273,12 +274,14 @@ pub enum TileWrite {
 pub struct TilemapStrokeBuilder {
     map: u64,
     key: String,
-    tilemap: Tilemap,
-    layer: usize,
+    bounds: Option<IRect>,
+    /// The id of the layer the stroke paints.
+    layer: u32,
+    kind: TilemapLayerKind,
     label: String,
     /// The chunks captured so far: the 3 x 3 ring around each touched cell's
     /// chunk, so the resolve ring of every written cell is held.
-    chunks: BTreeSet<(usize, ChunkCoord)>,
+    chunks: BTreeSet<(u32, ChunkCoord)>,
     before: Option<MapCells>,
     /// The layer's tiles sit between cells, so it takes no hand-placed tile.
     between: bool,
@@ -289,8 +292,8 @@ pub const BETWEEN_CELLS_TILES: &str =
     "hand-placed tiles are not supported on layers whose tiles sit between cells";
 
 impl TilemapStrokeBuilder {
-    /// Opens a stroke on layer `layer` of the map `entity`, or says why the
-    /// map cannot take one.
+    /// Opens a stroke on the layer at index `layer` of the map `entity`, or
+    /// says why the map cannot take one.
     pub fn begin(
         world: &mut World,
         entity: Entity,
@@ -310,7 +313,7 @@ impl TilemapStrokeBuilder {
             between = set.mode.placement() == Placement::BetweenCells;
             if world
                 .resource::<TilemapDataStore>()
-                .resolved_with(&key, layer)
+                .resolved_with(&key, target.id)
                 .is_none()
             {
                 refresh_terrain(world);
@@ -318,23 +321,12 @@ impl TilemapStrokeBuilder {
         }
         let map = (world.resource::<TilemapDataStore>().map_id(&key))
             .ok_or("the map's cells are not loaded")?;
-        let held = (world.resource::<TilemapDataStore>().get(&key)).map_or(0, |d| d.layers.len());
-        if held != 0 && held != tilemap.layers.len() {
-            let why = format!(
-                "the map lists {} layers but its cells hold {held}; edit layers through the \
-                 layer operators",
-                tilemap.layers.len()
-            );
-            if (world.resource_mut::<TilemapDataStore>().mismatch_warned).insert(map) {
-                warn!("Tilemap {entity}: {why}");
-            }
-            return Err(why);
-        }
         Ok(Self {
             map,
             key,
-            tilemap,
-            layer,
+            bounds: tilemap.bounds,
+            layer: target.id,
+            kind: target.kind,
             label: label.into(),
             chunks: BTreeSet::new(),
             before: None,
@@ -360,17 +352,17 @@ impl TilemapStrokeBuilder {
         if self.check(&write).is_err() {
             return 0;
         }
-        let cells = in_bounds(self.tilemap.bounds, cells);
-        let terrain_layer = self.tilemap.layers[self.layer].kind == TilemapLayerKind::Terrain;
+        let cells = in_bounds(self.bounds, cells);
+        let terrain_layer = self.kind == TilemapLayerKind::Terrain;
         let store = world.resource::<TilemapDataStore>();
         let Some(data) = store.get(&self.key) else {
             return 0;
         };
-        let changed = changes(data.layers.get(self.layer), terrain_layer, &cells, &write);
+        let changed = changes(data.layers.get(&self.layer), terrain_layer, &cells, &write);
         if changed == 0 {
             return 0;
         }
-        let fresh: BTreeSet<(usize, ChunkCoord)> = (ring_chunks(&cells).into_iter())
+        let fresh: BTreeSet<(u32, ChunkCoord)> = (ring_chunks(&cells).into_iter())
             .map(|chunk| (self.layer, chunk))
             .filter(|at| !self.chunks.contains(at))
             .collect();
@@ -384,8 +376,9 @@ impl TilemapStrokeBuilder {
         let Some(mut edit) = store.get_mut(&self.key) else {
             return 0;
         };
-        pad_layers(&mut edit, &self.tilemap);
-        write_layer(&mut edit.layers[self.layer], terrain_layer, &cells, write);
+        let layer = (edit.layers.entry(self.layer))
+            .or_insert_with(|| LayerData::empty(data_kind(self.kind)));
+        write_layer(layer, terrain_layer, &cells, write);
         if terrain_layer {
             edit.mark_written(self.layer, cells);
         }
@@ -436,7 +429,10 @@ impl TilemapStrokeBuilder {
     allows_undo = false,
     params(
         entity(Entity, doc = "The tilemap."),
-        layer(String, doc = "Layer name or index."),
+        layer(
+            String,
+            doc = "The layer: its name, # and its id (#3), or its index from 0 at the bottom."
+        ),
         cells(
             String,
             doc = "Cells as x,y pairs split by `;`, or one rect x0,y0,x1,y1 with both corners \
@@ -523,11 +519,34 @@ fn set_cells(world: &mut World, params: &OperatorParameters) -> Result<String, S
     Ok(format!("{changed} cells set on layer `{}`", layer.name))
 }
 
-/// The index of the layer named `named`, or at index `named`.
+/// The index of the layer `named` names: by `#` and its id, by its name, or
+/// by its index from 0 at the bottom. The id comes first, so a layer named
+/// like another's id cannot take its place.
 pub(crate) fn layer_named(tilemap: &Tilemap, named: &str) -> Result<usize, String> {
-    (tilemap.layers.iter().position(|l| l.name == named))
+    let by_id = (named.strip_prefix('#').and_then(|id| id.parse().ok()))
+        .and_then(|id| tilemap.layer_index(id));
+    by_id
+        .or_else(|| tilemap.layers.iter().position(|l| l.name == named))
         .or_else(|| named.parse().ok().filter(|i| *i < tilemap.layers.len()))
         .ok_or_else(|| format!("the map has no layer `{named}`"))
+}
+
+/// The index of the layer the `layer` param names, as [`layer_named`] reads
+/// it or as an index; `None` when it is left out or blank.
+pub(crate) fn layer_param(
+    tilemap: &Tilemap,
+    params: &OperatorParameters,
+) -> Result<Option<usize>, String> {
+    match params.get("layer") {
+        None => Ok(None),
+        Some(PropertyValue::String(named)) if named.trim().is_empty() => Ok(None),
+        Some(PropertyValue::String(named)) => layer_named(tilemap, named.trim()).map(Some),
+        Some(PropertyValue::Int(index)) => (usize::try_from(*index).ok())
+            .filter(|i| *i < tilemap.layers.len())
+            .map(Some)
+            .ok_or_else(|| format!("the map has no layer {index}")),
+        Some(other) => Err(format!("layer is a name, #id or index, not {other:?}")),
+    }
 }
 
 /// A tile named as `sheet:tile`, a packed layer or the `name` property the
@@ -614,13 +633,6 @@ fn ring_chunks(cells: &[CellCoord]) -> BTreeSet<ChunkCoord> {
             (-1..=1).flat_map(move |y| (-1..=1).map(move |x| ChunkCoord(at + IVec2::new(x, y))))
         })
         .collect()
-}
-
-/// Adds the layers the map lists that the cells do not hold yet.
-fn pad_layers(data: &mut TilemapData, tilemap: &Tilemap) {
-    for layer in tilemap.layers.iter().skip(data.layers.len()) {
-        data.layers.push(LayerData::empty(data_kind(layer.kind)));
-    }
 }
 
 /// Paints `id` over `cells` as Path strokes that join each cell to its side
@@ -777,11 +789,11 @@ mod tests {
 
     fn tile_map() -> TilemapData {
         TilemapData {
-            layers: vec![LayerData::empty(LayerKind::Tile)],
+            layers: [(0, LayerData::empty(LayerKind::Tile))].into(),
         }
     }
 
-    fn around(chunks: &[(i32, i32)]) -> BTreeSet<(usize, ChunkCoord)> {
+    fn around(chunks: &[(i32, i32)]) -> BTreeSet<(u32, ChunkCoord)> {
         (chunks.iter())
             .map(|&(x, y)| (0, ChunkCoord::new(x, y)))
             .collect()
@@ -790,12 +802,12 @@ mod tests {
     #[test]
     fn a_stroke_over_a_chunk_border_keeps_both_chunks_and_restores_them() {
         let mut before = tile_map();
-        before.layers[0]
+        (before.layers.get_mut(&0).expect("a layer"))
             .tiles
             .set(CellCoord::new(40, 0), TileRef::new(5));
         let mut next = before.clone();
         for x in [31, 32] {
-            next.layers[0]
+            (next.layers.get_mut(&0).expect("a layer"))
                 .tiles
                 .set(CellCoord::new(x, 0), TileRef::new(7));
         }
@@ -827,7 +839,8 @@ mod tests {
     #[test]
     fn a_chunk_holds_only_its_own_overrides() {
         let mut data = tile_map();
-        let authoring = data.layers[0].authoring.insert(TerrainAuthoring::default());
+        let layer = data.layers.get_mut(&0).expect("a layer");
+        let authoring = layer.authoring.insert(TerrainAuthoring::default());
         for (x, y) in [(0, 0), (31, 31), (32, 0), (-1, 5), (5, 32)] {
             authoring
                 .overrides
@@ -850,7 +863,7 @@ mod tests {
     fn padded_layers_go_again_on_undo() {
         let before = TilemapData::default();
         let mut next = tile_map();
-        next.layers[0]
+        (next.layers.get_mut(&0).expect("a layer"))
             .tiles
             .set(CellCoord::new(1, 1), TileRef::new(2));
         let chunks = around(&[(0, 0)]);
