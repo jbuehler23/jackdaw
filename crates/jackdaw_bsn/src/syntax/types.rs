@@ -161,9 +161,24 @@ impl Path {
     /// Converts the `Path` to the equivalent type path (which is a canonical, Rust-like path to the type.)
     /// Generic arguments are written as `TypePath` spells them, `A<B, C>`.
     pub fn to_type_path(&self) -> String {
-        let mut value = String::new();
+        let mut value = String::with_capacity(self.type_path_len());
         self.write_type_path(&mut value);
         value
+    }
+
+    fn type_path_len(&self) -> usize {
+        let separators = 2 * self.segments.len().saturating_sub(1);
+        let segments: usize = (self.segments.iter())
+            .map(|segment| {
+                let arguments: usize = segment.arguments.iter().map(Path::type_path_len).sum();
+                let brackets_and_commas = match segment.arguments.len() {
+                    0 => 0,
+                    n => 2 + 2 * (n - 1),
+                };
+                segment.ident.0.len() + arguments + brackets_and_commas
+            })
+            .sum();
+        separators + segments
     }
 
     fn write_type_path(&self, out: &mut String) {
