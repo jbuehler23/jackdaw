@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::OperatorAction;
-use jackdaw_input::{ActionOf, bindings};
+use jackdaw_input::{ActionOf, InputModKeys, ModKeys, bindings};
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::entity_ops::{
@@ -70,14 +70,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         "ArrowDown",
     )
     .alt()]);
-    ctx.bind_operator::<CoreExtensionInputContext, TransformRotate90RollCcwOp>([PresetInput::key(
-        "PageUp",
-    )
-    .alt()]);
-    ctx.bind_operator::<CoreExtensionInputContext, TransformRotate90RollCwOp>([PresetInput::key(
-        "PageDown",
-    )
-    .alt()]);
+    ctx.bind_operator::<CoreExtensionInputContext, TransformRotate90RollCcwOp>([
+        PresetInput::key("PageUp").alt(),
+        PresetInput::key("ArrowUp").alt().shift(),
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, TransformRotate90RollCwOp>([
+        PresetInput::key("PageDown").alt(),
+        PresetInput::key("ArrowDown").alt().shift(),
+    ]);
 
     // Nudge: plain Arrow / PageUp / PageDown without Press (hold-to-repeat).
     // Deferred: condition is NOT a bare press.
@@ -106,12 +106,18 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         world.spawn((
             OperatorAction(TransformNudgeYPosOp::ID),
             ActionOf(ext),
-            bindings![KeyCode::PageUp],
+            bindings![
+                KeyCode::PageUp,
+                KeyCode::ArrowUp.with_mod_keys(ModKeys::SHIFT)
+            ],
         ));
         world.spawn((
             OperatorAction(TransformNudgeYNegOp::ID),
             ActionOf(ext),
-            bindings![KeyCode::PageDown],
+            bindings![
+                KeyCode::PageDown,
+                KeyCode::ArrowDown.with_mod_keys(ModKeys::SHIFT)
+            ],
         ));
     });
 }

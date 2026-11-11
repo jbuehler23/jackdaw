@@ -644,6 +644,28 @@ impl Keybind {
         }
     }
 
+    /// Keybind with Alt+Shift.
+    pub const fn alt_shift(key: KeyCode) -> Self {
+        Self {
+            key,
+            ctrl: false,
+            shift: true,
+            alt: true,
+            mouse: None,
+        }
+    }
+
+    /// Keybind with Shift.
+    pub const fn shift(key: KeyCode) -> Self {
+        Self {
+            key,
+            ctrl: false,
+            shift: true,
+            alt: false,
+            mouse: None,
+        }
+    }
+
     /// Keybind that requires RMB held alongside the key, with no keyboard modifiers.
     pub const fn rmb_key(key: KeyCode) -> Self {
         Self {
@@ -1000,7 +1022,10 @@ impl Default for KeybindRegistry {
         bindings.insert(A::NewScene, b(K::KeyN, true, true, false));
 
         // -- Entity operations -----------------------------------------
-        bindings.insert(A::Delete, k(K::Delete));
+        bindings.insert(
+            A::Delete,
+            vec![Keybind::key(K::Delete), Keybind::key(K::Backspace)],
+        );
         bindings.insert(A::Duplicate, b(K::KeyD, true, false, false));
         bindings.insert(A::CopyComponents, b(K::KeyC, true, false, false));
         bindings.insert(A::PasteComponents, b(K::KeyV, true, false, false));
@@ -1016,16 +1041,28 @@ impl Default for KeybindRegistry {
         bindings.insert(A::Rotate90Right, b(K::ArrowRight, false, false, true));
         bindings.insert(A::Rotate90Up, b(K::ArrowUp, false, false, true));
         bindings.insert(A::Rotate90Down, b(K::ArrowDown, false, false, true));
-        bindings.insert(A::Roll90Left, b(K::PageUp, false, false, true));
-        bindings.insert(A::Roll90Right, b(K::PageDown, false, false, true));
+        bindings.insert(
+            A::Roll90Left,
+            vec![Keybind::alt(K::PageUp), Keybind::alt_shift(K::ArrowUp)],
+        );
+        bindings.insert(
+            A::Roll90Right,
+            vec![Keybind::alt(K::PageDown), Keybind::alt_shift(K::ArrowDown)],
+        );
 
-        // -- Nudge (Arrow keys / PageUp/Down) -------------------------
+        // -- Nudge (Arrow keys / PageUp/Down / Shift + Arrow Keys) ----
         bindings.insert(A::NudgeLeft, k(K::ArrowLeft));
         bindings.insert(A::NudgeRight, k(K::ArrowRight));
         bindings.insert(A::NudgeForward, k(K::ArrowUp));
         bindings.insert(A::NudgeBack, k(K::ArrowDown));
-        bindings.insert(A::NudgeUp, k(K::PageUp));
-        bindings.insert(A::NudgeDown, k(K::PageDown));
+        bindings.insert(
+            A::NudgeUp,
+            vec![Keybind::key(K::PageUp), Keybind::shift(K::ArrowUp)],
+        );
+        bindings.insert(
+            A::NudgeDown,
+            vec![Keybind::key(K::PageDown), Keybind::shift(K::ArrowDown)],
+        );
 
         // -- Brush edit modes ------------------------------------------
         bindings.insert(A::VertexMode, k(K::Digit1));

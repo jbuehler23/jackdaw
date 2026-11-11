@@ -32,8 +32,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         PresetInput::key("Delete"),
         PresetInput::key("Backspace"),
     ]);
-    ctx.bind_operator_host::<BrushNudgeUpOp>([PresetInput::key("PageUp")]);
-    ctx.bind_operator_host::<BrushNudgeDownOp>([PresetInput::key("PageDown")]);
+    ctx.bind_operator_host::<BrushNudgeUpOp>([
+        PresetInput::key("PageUp"),
+        PresetInput::key("ArrowUp").shift(),
+    ]);
+    ctx.bind_operator_host::<BrushNudgeDownOp>([
+        PresetInput::key("PageDown"),
+        PresetInput::key("ArrowUp").shift(),
+    ]);
 }
 
 /// True when the operator is allowed to mutate brush elements: brush-edit
