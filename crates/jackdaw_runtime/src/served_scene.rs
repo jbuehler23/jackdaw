@@ -15,6 +15,7 @@ use std::time::Duration;
 use bevy::asset::io::AssetSourceId;
 use bevy::asset::{AssetPath, AssetServer};
 use bevy::prelude::*;
+use jackdaw_bsn::SceneBsnAst;
 use jackdaw_pie_protocol::SceneAnswer;
 use jackdaw_pie_protocol::event::StateEvent;
 
@@ -37,10 +38,18 @@ pub(crate) struct SceneRequests {
     open: HashMap<u64, OpenRequest>,
     /// Answers that arrived this update, taken by the roots waiting on them in
     /// the next spawn pass.
-    answered: HashMap<u64, SceneAnswer>,
+    answered: HashMap<u64, Received>,
     /// Set when a request timed out and cleared by any answer. While set, new
     /// roots load their file without asking.
     editor_silent: bool,
+}
+
+/// An answer and, for a document, what reading its text gave. The first root to
+/// spawn it takes the reading; any other reads the text again, since a document
+/// cannot be copied.
+struct Received {
+    answer: SceneAnswer,
+    document: Option<Result<SceneBsnAst, String>>,
 }
 
 struct OpenRequest {
@@ -74,9 +83,9 @@ pub(crate) enum Gate {
     File,
     /// Look again next update.
     Hold,
-    /// Spawn this text.
+    /// Spawn this document, or report why it could not be read.
     Document {
-        text: String,
+        document: Box<Result<SceneBsnAst, String>>,
         dir: String,
         stem: String,
     },
@@ -163,8 +172,11 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
         return Gate::Hold;
     };
 
-    let requests = world.resource::<SceneRequests>();
-    let answer = requests.answered.get(&request).cloned();
+    let mut requests = world.resource_mut::<SceneRequests>();
+    let (answer, document) = match requests.answered.get_mut(&request) {
+        Some(received) => (Some(received.answer.clone()), received.document.take()),
+        None => (None, None),
+    };
     if answer.is_none() && requests.open.contains_key(&request) {
         return Gate::Hold;
     }
@@ -180,7 +192,11 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
     match answer {
         Some(SceneAnswer::Document {
             text, dir, stem, ..
-        }) => Gate::Document { text, dir, stem },
+        }) => Gate::Document {
+            document: Box::new(document.unwrap_or_else(|| read_document(&text))),
+            dir,
+            stem,
+        },
         Some(SceneAnswer::UseFile { path: file, .. }) if file != path => {
             root_entity.insert(SceneFromFile);
             let handle = world
@@ -196,6 +212,10 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
             Gate::File
         }
     }
+}
+
+fn read_document(text: &str) -> Result<SceneBsnAst, String> {
+    jackdaw_bsn::parse_bsn_text(text).map_err(|err| err.to_string())
 }
 
 fn answer_sidecars(answer: &SceneAnswer) -> Option<&str> {
@@ -235,18 +255,31 @@ fn ask(world: &mut World, path: &str) -> u64 {
 
 /// Take the editor's answer to `request`. A document's assets load now, whether
 /// or not a root still waits on it: the editor counts them as given, so edits it
-/// sends from here on name them.
+/// sends from here on name them. The text is read once, for its assets and for
+/// the spawn.
 pub(crate) fn receive(world: &mut World, request: u64, answer: SceneAnswer) {
     if !world.contains_resource::<SceneRequests>() {
         return;
     }
-    if let SceneAnswer::Document { text, .. } = &answer {
-        crate::node_sync::load_scene_assets(world, text);
-    }
+    let document = match &answer {
+        SceneAnswer::Document { text, .. } => {
+            let mut document = read_document(text);
+            match &mut document {
+                Ok(ast) => crate::node_sync::load_document_assets(world, ast),
+                Err(err) => {
+                    warn!("PIE: could not read the asset definitions the editor sent: {err}");
+                }
+            }
+            Some(document)
+        }
+        SceneAnswer::UseFile { .. } => None,
+    };
     let mut requests = world.resource_mut::<SceneRequests>();
     requests.editor_silent = false;
     if requests.open.remove(&request).is_some() {
-        requests.answered.insert(request, answer);
+        requests
+            .answered
+            .insert(request, Received { answer, document });
     } else {
         debug!("PIE: too late for a root, the answer to scene request {request}");
     }
@@ -534,6 +567,19 @@ mod tests {
         send(&mut editor, &document(request, scene_text(5.0)));
         update_until_spawned(&mut app);
         assert_eq!(node_xs(&mut app), vec![5.0]);
+    }
+
+    #[test]
+    fn a_served_document_is_read_once_from_its_arrival_to_its_spawn() {
+        let (mut app, mut editor, _dir) = game();
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        let before = jackdaw_bsn::parses_on_this_thread();
+        send(&mut editor, &document(request, scene_text(5.0)));
+        update_until_spawned(&mut app);
+        assert_eq!(node_xs(&mut app), vec![5.0]);
+        assert_eq!(jackdaw_bsn::parses_on_this_thread() - before, 1);
     }
 
     #[test]

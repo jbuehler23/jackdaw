@@ -566,13 +566,14 @@ struct EditorDefinitions(HashMap<String, u64>);
 /// every entity holding it updates. A definition the name last loaded leaves the
 /// asset alone, with whatever the game has done to it since.
 pub fn load_scene_assets(world: &mut World, text: &str) {
-    let mut ast = match jackdaw_bsn::parse_bsn_text(text) {
-        Ok(ast) => ast,
-        Err(err) => {
-            warn!("PIE: could not read the asset definitions the editor sent: {err}");
-            return;
-        }
-    };
+    match jackdaw_bsn::parse_bsn_text(text) {
+        Ok(mut ast) => load_document_assets(world, &mut ast),
+        Err(err) => warn!("PIE: could not read the asset definitions the editor sent: {err}"),
+    }
+}
+
+/// [`load_scene_assets`] for a document already read, which is left as it was.
+pub(crate) fn load_document_assets(world: &mut World, ast: &mut jackdaw_bsn::SceneBsnAst) {
     let held = world
         .get_resource::<BsnSceneAssets>()
         .map(|assets| assets.0.clone())
@@ -583,7 +584,7 @@ pub fn load_scene_assets(world: &mut World, text: &str) {
     let mut changed = HashMap::new();
     let mut unchanged = Vec::new();
     for &root in &ast.roots {
-        let Some((reference, digest)) = definition_of(&ast, root) else {
+        let Some((reference, digest)) = definition_of(ast, root) else {
             continue;
         };
         if held.contains_key(&reference) && loaded.0.get(&reference) == Some(&digest) {
@@ -592,8 +593,10 @@ pub fn load_scene_assets(world: &mut World, text: &str) {
             changed.insert(reference, digest);
         }
     }
+    let roots = ast.roots.clone();
     ast.roots.retain(|root| !unchanged.contains(root));
-    let entries = load_with_textures(world, &ast, |name| held.get(&format!("#{name}")).cloned());
+    let entries = load_with_textures(world, ast, |name| held.get(&format!("#{name}")).cloned());
+    ast.roots = roots;
     let mut assets = world.get_resource_or_init::<BsnSceneAssets>();
     for entry in entries {
         let reference = format!("#{}", entry.name);

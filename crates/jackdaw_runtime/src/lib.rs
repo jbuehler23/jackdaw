@@ -792,13 +792,16 @@ pub(crate) fn spawn_loaded_scenes(
         match served_scene::gate(world, root_entity, &handle) {
             served_scene::Gate::File => {}
             served_scene::Gate::Hold => continue,
-            served_scene::Gate::Document { text, dir, stem } => {
+            served_scene::Gate::Document {
+                document,
+                dir,
+                stem,
+            } => {
                 world.entity_mut(root_entity).insert(ServedScene);
-                let document = parse_bsn_text(&text).map_err(|err| err.to_string());
                 outcomes.push(spawn_scene_document(
                     world,
                     root_entity,
-                    document,
+                    *document,
                     Path::new(&dir),
                     Some(stem),
                 ));
