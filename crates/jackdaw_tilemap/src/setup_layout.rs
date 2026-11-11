@@ -107,11 +107,11 @@ impl TilesetSetup {
             |setup: &Self, id: TerrainId| id == 0 || setup.sets[index].terrains.contains(&id);
         if !held(self, outer) {
             let at = (self.sets[index].terrains.iter()).position(|t| *t == inner);
-            self.join_set(index, outer, Some(at.unwrap_or(0)), true)?;
+            self.add_set_terrain(index, outer, Some(at.unwrap_or(0)))?;
         }
         if !held(self, inner) {
             let below = (self.sets[index].terrains.iter()).position(|t| *t == outer);
-            self.join_set(index, inner, below.map(|b| b + 1), true)?;
+            self.add_set_terrain(index, inner, below.map(|b| b + 1))?;
         }
         let mut set = Vec::with_capacity(shapes.len());
         for (cell, peers) in slots.iter().zip(shapes) {
@@ -130,10 +130,10 @@ impl TilesetSetup {
 
     /// The set a layout of `inner` on `outer` drawn in `mode` goes in:
     /// `chosen`, else a set of `mode` holding both terrains, else any set
-    /// stacking `inner` above `outer`, else a set of `mode` holding either; `None` when a new
-    /// set is to be made. A terrain may keep sets of other modes; one in
-    /// another set of the target's mode is refused. With no `mode`, the set
-    /// holding both terrains or either one.
+    /// stacking `inner` above `outer`, else a set holding either, of `mode`
+    /// first; `None` when a new set is to be made. A terrain in a set other
+    /// than the target is refused, since a terrain belongs to one set. With
+    /// no `mode`, the set holding both terrains or either one.
     pub fn layout_set(
         &self,
         chosen: Option<usize>,
@@ -142,11 +142,10 @@ impl TilesetSetup {
         mode: Option<MatchMode>,
     ) -> Result<Option<usize>, SetupError> {
         if let Some(chosen) = chosen {
-            let target = self
-                .sets
+            self.sets
                 .get(chosen)
                 .ok_or(SetupError::UnknownSet(chosen))?;
-            self.clash(chosen, target.mode.value, [inner, outer])?;
+            self.clash(chosen, [inner, outer])?;
             return Ok(Some(chosen));
         }
         let holds = |s: &SetupSet, id: TerrainId| id != 0 && s.terrains.contains(&id);
@@ -169,24 +168,17 @@ impl TilesetSetup {
         };
         let found = (self.sets.iter().position(|s| of_mode(s) && both(s)))
             .or_else(|| self.sets.iter().position(stacked))
-            .or_else(|| self.sets.iter().position(|s| of_mode(s) && either(s)));
-        let target_mode = found.map_or(mode, |i| self.sets[i].mode.value);
-        self.clash(found.unwrap_or(usize::MAX), target_mode, [inner, outer])?;
+            .or_else(|| self.sets.iter().position(|s| of_mode(s) && either(s)))
+            .or_else(|| self.sets.iter().position(either));
+        self.clash(found.unwrap_or(usize::MAX), [inner, outer])?;
         Ok(found)
     }
 
-    /// Refuses a terrain of `terrains` that another set than `target` of
-    /// `mode` holds.
-    fn clash(
-        &self,
-        target: usize,
-        mode: MatchMode,
-        terrains: [TerrainId; 2],
-    ) -> Result<(), SetupError> {
+    /// Refuses a terrain of `terrains` that another set than `target` holds.
+    fn clash(&self, target: usize, terrains: [TerrainId; 2]) -> Result<(), SetupError> {
         for terrain in terrains.into_iter().filter(|t| *t != 0) {
-            let other = (self.sets.iter().enumerate()).find(|(i, s)| {
-                *i != target && s.mode.value == mode && s.terrains.contains(&terrain)
-            });
+            let other = (self.sets.iter().enumerate())
+                .find(|(i, s)| *i != target && s.terrains.contains(&terrain));
             if let Some((set, _)) = other {
                 let in_target = self
                     .sets
@@ -391,10 +383,13 @@ mod tests {
     use super::*;
     use crate::setup_edit::tests::{GRASS, SAND, at, edge, farm, pair_set};
 
-    /// A water terrain in no set yet, beside the farm's grass.
+    /// Water and shore terrains in no set yet, beside the farm's set.
     fn water_and_shore(setup: &mut TilesetSetup) -> (TerrainId, TerrainId) {
         let water = setup.add_terrain("water", [0, 0, 255], false).expect("id");
-        (water, GRASS)
+        let shore = setup
+            .add_terrain("shore", [200, 200, 0], false)
+            .expect("id");
+        (water, shore)
     }
 
     const GRID: UVec2 = UVec2::new(8, 8);
@@ -418,7 +413,7 @@ mod tests {
         assert_eq!(set.mode.value, MatchMode::CornersAndSides);
         assert_eq!(
             (set.name.as_str(), set.terrains.as_slice()),
-            ("Terrain set 2", &[GRASS, water][..])
+            ("Terrain set 2", &[shore, water][..])
         );
         assert_eq!(setup.coverage(1).expect("set").covered, 4);
 
@@ -495,6 +490,17 @@ mod tests {
     }
 
     #[test]
+    fn a_layout_goes_in_the_one_set_its_terrain_belongs_to() {
+        let mut setup = farm();
+        let water = setup.add_terrain("water", [0, 0, 255], false).expect("id");
+        let corners = (LayoutTemplate::Corner2x2, Placement::OnCells);
+        let block = (UVec2::new(6, 3), UVec2::splat(2));
+        let refused = setup.apply_template(corners, (water, GRASS), 0, GRID, block);
+        assert_eq!(refused, Err(SetupError::SetDrawn(MatchMode::Sides, 3)));
+        assert_eq!(setup.sets.len(), 1, "no second set takes grass");
+    }
+
+    #[test]
     fn a_blob_in_a_wide_block_flows_row_by_row_and_reports_what_it_skips() {
         let mut setup = farm();
         let (water, shore) = water_and_shore(&mut setup);
@@ -551,11 +557,10 @@ mod tests {
     }
 
     #[test]
-    fn corner_coverage_counts_the_sixteen_corner_patterns_with_shared_plain_tiles() {
+    fn corner_coverage_counts_the_sixteen_corner_patterns() {
         let mut setup = farm();
         let (dirt, shore) = water_and_shore(&mut setup);
         let corners = pair_set(&mut setup, dirt, shore, MatchMode::Corners);
-        let sides = 0;
         let shapes = LayoutTemplate::Corner16.tiles(dirt, shore);
         for (tile, shape) in (40..).zip(&shapes) {
             let corners = (Peer::CORNERS.iter())
@@ -575,14 +580,32 @@ mod tests {
 
         setup.tiles.remove(&at(0));
         let plain_corners = setup.tiles[&at(55)].clone();
+        assert!(setup.holds(corners, &plain_corners), "shore corners alone");
+        let coverage = setup.coverage(corners).expect("set");
+        assert_eq!(coverage.covered, 16, "the plain corner tile serves it");
+    }
+
+    /// Auto setup may list a terrain in sets of two match modes.
+    #[test]
+    fn a_plain_tile_two_modes_share_is_left_out() {
+        let mut setup = farm();
+        let dirt = setup.add_terrain("dirt", [0, 0, 255], false).expect("id");
+        let corners = setup.add_set("", MatchMode::Corners).expect("a set");
+        setup.sets[corners].terrains = vec![GRASS, dirt];
+        let sides = 0;
+        for (tile, shape) in (40..).zip(&LayoutTemplate::Corner16.tiles(dirt, GRASS)) {
+            let corner_peers = (Peer::CORNERS.iter())
+                .fold(TileTerrains::default(), |t, p| t.with(*p, shape.get(*p)));
+            setup.set_peers(at(tile), corner_peers).expect("bits");
+        }
+        setup.tiles.remove(&at(0));
+        let plain_corners = setup.tiles[&at(55)].clone();
         assert!(
             !setup.holds(corners, &plain_corners),
             "grass corners alone also fit the sides set as tightly, so the solver leaves the tile out"
         );
-        let coverage = setup.coverage(corners).expect("set");
-        assert_eq!(coverage.covered, 15, "only the whole grass tile served it");
         setup
-            .set_peers(at(0), TileTerrains::filled(shore))
+            .set_peers(at(0), TileTerrains::filled(GRASS))
             .expect("bits");
         assert!(setup.holds(corners, &setup.tiles[&at(0)]));
         assert!(setup.holds(sides, &setup.tiles[&at(0)]));

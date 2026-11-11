@@ -289,6 +289,13 @@ impl TilesetSetup {
         (self.sets.iter()).position(|s| s.has(a) && s.has(b))
     }
 
+    /// Index of the set holding terrain `id`.
+    pub fn set_of(&self, id: TerrainId) -> Option<usize> {
+        (id != 0)
+            .then(|| self.sets.iter().position(|s| s.terrains.contains(&id)))
+            .flatten()
+    }
+
     /// Index of the set named `name`.
     pub fn set_named(&self, name: &str) -> Option<usize> {
         self.sets.iter().position(|s| s.name == name)

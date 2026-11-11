@@ -1480,14 +1480,16 @@ mod tests {
 
     #[test]
     fn a_layer_on_a_mixed_mode_tileset_is_told_to_pick_a_mode() {
-        let set = |inner, mode| TilesetTerrainSet {
-            inner,
-            outer: 1,
+        let set = |terrains: &[u8], mode| TilesetTerrainSet {
+            terrains: terrains.to_vec(),
             mode,
             ..Default::default()
         };
         let tileset = Tileset {
-            terrain_sets: vec![set(2, TerrainMatch::Sides), set(3, TerrainMatch::Corners)],
+            terrain_sets: vec![
+                set(&[1, 2], TerrainMatch::Sides),
+                set(&[3], TerrainMatch::Corners),
+            ],
             ..Default::default()
         };
         let warning = (tileset.terrain_set(layer_mode(LayerTerrainMatch::Auto)))

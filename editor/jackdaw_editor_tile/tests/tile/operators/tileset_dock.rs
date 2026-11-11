@@ -17,36 +17,36 @@ use jackdaw_editor_core::asset_index::AssetIndex;
 use jackdaw_editor_tile::tileset_bits::MissingGlyph;
 use jackdaw_editor_tile::tileset_dock::MoreMenu;
 use jackdaw_editor_tile::tileset_dock::{
-    DockAction, DockControl, DockPane, DockView, NameField, Pane, SheetPicture, TILESET_WINDOW_ID,
-    TerrainNameField, TerrainSwatch, TilesetDock, TilesetDockInputContext, TilesetDockViews,
+    DockAction, DockControl, DockPane, DockView, NameField, Pane, SetModePick, SheetPicture,
+    TILESET_WINDOW_ID, TerrainNameField, TerrainSwatch, TilesetDock, TilesetDockInputContext,
+    TilesetDockViews, open_row_menu,
 };
 use jackdaw_editor_tile::tileset_modes::ModeId;
 use jackdaw_feathers::button::ButtonOperatorCall;
+use jackdaw_feathers::color_picker::{ColorPickerCommitEvent, ColorPickerState};
 use jackdaw_feathers::menu_bar::DynamicMenuRows;
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_panels::tree::{DockTree, Edge, TabId};
 use jackdaw_scene_types::PropertyValue;
 use jackdaw_scene_types::tilemap::{Tilemap, TilemapLayer};
 use jackdaw_tileset::Tileset;
+use jackdaw_widgets::context_menu::ContextMenuItem;
 
 const SECOND: &str = "second.tileset.bsn";
 
 const GRASS: u8 = 1;
 const WATER: u8 = 2;
 
-/// The overworld sheet imported with nothing set up, then grass and water, a
-/// corner set of grass then water and tile 0 of grass with a water corner, by
-/// hand.
+/// The overworld sheet imported with nothing set up, then grass and water in
+/// the set the first terrain made, matching corners, and tile 0 of grass with
+/// a water corner, by hand.
 pub(crate) fn handmade() -> (App, tempfile::TempDir) {
     let (mut app, dir) = project_app();
     import(&mut app, &[("paths", SHEET)]);
     call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
     call(&mut app, "tileset.terrain.add", &[("name", "water")]);
-    call(&mut app, "tileset.terrain_set.add", &[("mode", "corners")]);
-    for terrain in ["1", "2"] {
-        let join = [("set", "0"), ("terrain", terrain)];
-        call(&mut app, "tileset.terrain_set.add_terrain", &join);
-    }
+    let corners = [("set", "0"), ("mode", "corners")];
+    call(&mut app, "tileset.terrain_set.set", &corners);
     let bits = [("tile", "0:0"), ("peers", "1,1,1,1,1,1,1,1,2")];
     call(&mut app, "tileset.tile.set_bits", &bits);
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
@@ -159,6 +159,48 @@ pub(crate) fn pick_more(app: &mut App, root: Entity, id: &str) {
         call = call.param(key, value);
     }
     call.call().expect("dispatches").assert_finished();
+    settle(app);
+}
+
+/// The labels of the context menu of `row`, after running the one labelled
+/// `label` when given.
+pub(crate) fn row_menu(
+    app: &mut App,
+    root: Entity,
+    row: DockAction,
+    label: Option<&str>,
+) -> Vec<String> {
+    let menu = open_row_menu(app.world_mut(), root, row, Vec2::ZERO).expect("a menu");
+    settle(app);
+    let mut items: Vec<(String, Entity)> = app
+        .world_mut()
+        .query::<(Entity, &ContextMenuItem, &ChildOf)>()
+        .iter(app.world())
+        .filter(|(_, _, parent)| parent.parent() == menu)
+        .map(|(e, item, _)| (item.action.clone(), e))
+        .collect();
+    items.sort();
+    let items = items.into_iter().map(|(_, e)| e);
+    let labelled: Vec<(Entity, String)> = items
+        .map(|item| (item, texts(app, item).join("")))
+        .collect();
+    if let Some(label) = label {
+        let (item, _) = (labelled.iter())
+            .find(|(_, l)| l == label)
+            .unwrap_or_else(|| panic!("{label} in {labelled:?}"));
+        app.world_mut().trigger(Activate { entity: *item });
+        settle(app);
+    }
+    labelled.into_iter().map(|(_, l)| l).collect()
+}
+
+/// Click `row` twice in quick succession.
+pub(crate) fn double_click(app: &mut App, root: Entity, row: DockAction) {
+    for _ in 0..2 {
+        let entity = control(app, root, row);
+        app.world_mut().trigger(Activate { entity });
+        app.update();
+    }
     settle(app);
 }
 
@@ -651,9 +693,7 @@ fn the_missing_shapes_of_a_set_open_on_request() {
         "{shown:?}"
     );
     assert!(
-        shown
-            .iter()
-            .any(|t| t == "Terrain set 1 (Corners): 1 of 16 shapes"),
+        shown.iter().any(|t| t == "Corners: 15 shapes missing"),
         "{shown:?}"
     );
     assert_eq!(listed(&mut app), 0, "collapsed: {shown:?}");
@@ -690,7 +730,7 @@ fn name_field(app: &mut App, root: Entity) -> Option<(NameField, Entity, String)
         .world_mut()
         .query::<(Entity, &TerrainNameField)>()
         .iter(app.world())
-        .filter(|(_, f)| f.root == root)
+        .filter(|(_, f)| f.root == root && !matches!(f.field, NameField::Picked(_)))
         .map(|(e, f)| (e, f.field))
         .collect();
     assert!(fields.len() <= 1, "{fields:?}");
@@ -769,32 +809,34 @@ fn escape_closes_the_name_field_and_adds_nothing() {
 }
 
 #[test]
-fn the_new_terrain_button_opens_the_same_field() {
+fn add_terrain_puts_a_new_terrain_in_the_set_and_names_it_in_place() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
-    let button = control(&mut app, root, DockAction::NewTerrain);
-    assert!(disabled(&app, button), "no tile, a disabled button");
-    press(&mut app, root, DockAction::Tile(0, 6));
-    let button = control(&mut app, root, DockAction::NewTerrain);
-    assert!(!disabled(&app, button));
-    press(&mut app, root, DockAction::NewTerrain);
-    let (field, _, prefill) = name_field(&mut app, root).expect("the field opens");
-    assert_eq!((field, prefill.as_str()), (NameField::New, "Terrain 3"));
-    input(&mut app, "input.key key=Enter");
-    let added = on_disk(&dir).terrains.pop().expect("added");
+    let count = entries(&app);
+    press(&mut app, root, DockAction::AddTerrain);
+    let added = on_disk(&dir);
+    assert_eq!(added.terrain_sets[0].terrains, [GRASS, WATER, 3]);
+    assert_eq!(view(&app).brush, 3, "picked for painting");
+    let (field, editable, prefill) = name_field(&mut app, root).expect("the field opens");
     assert_eq!(
-        (added.name.as_str(), added.icon),
-        ("Terrain 3", Some((0, 6)))
+        (field, prefill.as_str()),
+        (NameField::Rename(3), "Terrain 3")
     );
+    assert_eq!(focused(&app), Some(editable), "it has the keyboard");
+    input(&mut app, "input.text text=dirt");
+    input(&mut app, "input.key key=Enter");
+    let names: Vec<String> = (on_disk(&dir).terrains.into_iter())
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, ["grass", "water", "dirt"]);
+    assert_eq!(entries(&app), count + 2, "the add and the rename");
 }
 
 #[test]
-fn the_brush_terrain_is_renamed_and_removed_from_the_list() {
+fn a_double_click_renames_a_terrain_and_its_menu_deletes_it() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
-    assert!(!actions(&mut app, root).contains(&DockAction::RenameTerrain(WATER)));
-    press(&mut app, root, DockAction::Brush(WATER));
-    press(&mut app, root, DockAction::RenameTerrain(WATER));
+    double_click(&mut app, root, DockAction::Brush(WATER));
     let (field, _, prefill) = name_field(&mut app, root).expect("the field opens");
     assert_eq!(
         (field, prefill.as_str()),
@@ -809,60 +851,188 @@ fn the_brush_terrain_is_renamed_and_removed_from_the_list() {
     assert_eq!(names, ["grass", "lake"]);
     assert_eq!(entries(&app), count + 1);
 
-    press(&mut app, root, DockAction::RemoveTerrain(WATER));
+    let labels = row_menu(&mut app, root, DockAction::Brush(WATER), Some("Delete"));
+    assert_eq!(labels, ["Rename", "Move up", "Delete"]);
     let names: Vec<String> = (on_disk(&dir).terrains.into_iter())
         .map(|t| t.name)
         .collect();
     assert_eq!(names, ["grass"]);
     assert_eq!(entries(&app), count + 2);
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir).terrains.len(), 2, "one undo brings it back");
 }
 
 #[test]
-fn terrains_are_listed_by_their_icon_tile_and_sets_by_their_names() {
+fn the_menu_moves_a_terrain_within_its_set() {
     let (mut app, dir) = handmade();
-    call(
-        &mut app,
-        "tileset.terrain.add",
-        &[("name", "dirt"), ("icon", "0:5")],
-    );
     let (_, root) = opened(&mut app);
-    let swatches: Vec<(Entity, u8)> = app
-        .world_mut()
-        .query::<(Entity, &TerrainSwatch)>()
-        .iter(app.world())
-        .filter(|(_, s)| s.root == root)
-        .map(|(e, s)| (e, s.terrain))
-        .collect();
-    let of = |terrain: u8| {
-        (swatches.iter())
-            .find(|(_, t)| *t == terrain)
-            .map(|(e, _)| *e)
-            .expect("listed")
-    };
-    let tileset = on_disk(&dir);
-    let dirt = tileset.terrains[2].id;
-    let rect = app
-        .world()
-        .get::<ImageNode>(of(dirt))
-        .and_then(|image| image.rect);
-    let (min, size) = tileset.sheet_rect(0, 5).expect("a tile");
-    assert_eq!(
-        rect,
-        Some(Rect::from_corners(min.as_vec2(), (min + size).as_vec2()))
-    );
-    let grass = of(GRASS);
-    assert!(app.world().get::<ImageNode>(grass).is_none());
-    let colour = app.world().get::<BackgroundColor>(grass).map(|c| c.0);
-    assert!(colour.is_some_and(|c| c.alpha() == 1.0), "{colour:?}");
+    let labels = row_menu(&mut app, root, DockAction::Brush(GRASS), Some("Move down"));
+    assert_eq!(labels, ["Rename", "Move down", "Delete"]);
+    assert_eq!(on_disk(&dir).terrain_sets[0].terrains, [WATER, GRASS]);
+    row_menu(&mut app, root, DockAction::Brush(GRASS), Some("Move up"));
+    assert_eq!(on_disk(&dir).terrain_sets[0].terrains, [GRASS, WATER]);
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir).terrain_sets[0].terrains, [WATER, GRASS]);
+}
 
+#[test]
+fn a_swatch_color_recolors_the_terrain_and_the_overlay_in_one_undo_step() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Mode(ModeId::TERRAINS));
+    press(&mut app, root, DockAction::Brush(WATER));
+    let swatches: Vec<(Entity, [f32; 4])> = app
+        .world_mut()
+        .query::<(Entity, &TerrainSwatch, &ColorPickerState)>()
+        .iter(app.world())
+        .filter(|(_, s, _)| s.root == root && s.terrain == WATER)
+        .map(|(e, _, state)| (e, state.to_rgba()))
+        .collect();
+    assert_eq!(swatches.len(), 2, "its row and the picked block");
+    let water = on_disk(&dir).terrains[1].swatch.to_f32_array();
+    let close = |c: &[f32; 4]| c.iter().zip(&water).all(|(a, b)| (a - b).abs() < 0.01);
+    assert!(swatches.iter().all(|(_, c)| close(c)), "{swatches:?}");
+
+    let count = entries(&app);
+    let before = on_disk(&dir);
+    app.world_mut().trigger(ColorPickerCommitEvent {
+        entity: swatches[0].0,
+        color: [0.2, 0.4, 1.0, 1.0],
+    });
+    settle(&mut app);
+    let after = on_disk(&dir);
+    assert_eq!(after.terrains[1].swatch.to_hex(), "#3366FF");
+    assert_eq!(entries(&app), count + 1);
+    let overlay = app
+        .world_mut()
+        .query::<&jackdaw_editor_tile::zone_overlay::ZoneOverlay>()
+        .iter(app.world())
+        .filter(|o| o.root == root)
+        .find_map(|o| o.values.colors.get(&u32::from(WATER)).copied());
+    assert_eq!(
+        overlay.map(|c| c.to_srgba().to_hex()),
+        Some("#3366FF".to_string()),
+        "the overlay follows"
+    );
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir), before);
+}
+
+#[test]
+fn the_hint_names_the_zones_and_the_picked_terrain() {
+    let (mut app, _dir) = handmade();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Mode(ModeId::TERRAINS));
     let shown = texts(&mut app, root);
     assert!(
         shown
             .iter()
-            .any(|t| t.starts_with("Terrain set 1 (Corners):")),
+            .any(|t| t == "Pick a terrain to paint it on the tiles"),
         "{shown:?}"
     );
-    assert!(!shown.iter().any(|t| t.contains(" over ")), "{shown:?}");
+    press(&mut app, root, DockAction::Brush(WATER));
+    let shown = texts(&mut app, root);
+    assert!(
+        shown
+            .iter()
+            .any(|t| t == "Click corners on the tiles to paint water"),
+        "{shown:?}"
+    );
+    let both = [("set", "0"), ("mode", "corners_and_sides")];
+    call(&mut app, "tileset.terrain_set.set", &both);
+    settle(&mut app);
+    let shown = texts(&mut app, root);
+    assert!(
+        shown
+            .iter()
+            .any(|t| t == "Click corners and sides on the tiles to paint water"),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn one_set_lists_its_terrains_alone_and_a_second_brings_headers() {
+    let (mut app, _dir) = handmade();
+    let (_, root) = opened(&mut app);
+    let shown = texts(&mut app, root);
+    assert!(
+        !shown.iter().any(|t| t.contains("Terrain set")),
+        "{shown:?}"
+    );
+    assert!(!actions(&mut app, root).contains(&DockAction::ActiveSet(0)));
+    for gone in ["background", "empty", "New terrain", "Add set"] {
+        assert!(!shown.iter().any(|t| t == gone), "{gone}: {shown:?}");
+    }
+    let swatches = app
+        .world_mut()
+        .query::<&TerrainSwatch>()
+        .iter(app.world())
+        .filter(|s| s.root == root)
+        .count();
+    assert_eq!(swatches, 2, "a swatch per terrain row");
+
+    let shore = [("name", "Shore"), ("mode", "sides")];
+    call(&mut app, "tileset.terrain_set.add", &shore);
+    call(
+        &mut app,
+        "tileset.terrain.add",
+        &[("name", "sand"), ("set", "Shore")],
+    );
+    settle(&mut app);
+    let shown = texts(&mut app, root);
+    for name in ["Terrain set 1", "Shore", "Corners", "Sides"] {
+        assert!(shown.iter().any(|t| t == name), "{name}: {shown:?}");
+    }
+    let picks = app
+        .world_mut()
+        .query::<&SetModePick>()
+        .iter(app.world())
+        .filter(|p| p.root == root)
+        .count();
+    assert_eq!(picks, 2, "a mode picker per header");
+}
+
+#[test]
+fn a_double_click_renames_a_set_and_its_menu_deletes_it_with_its_terrains() {
+    let (mut app, dir) = handmade();
+    call(&mut app, "tileset.terrain_set.add", &[("name", "Shore")]);
+    call(
+        &mut app,
+        "tileset.terrain.add",
+        &[("name", "sand"), ("set", "Shore")],
+    );
+    settle(&mut app);
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::ActiveSet(1));
+    assert_eq!(view(&app).active.as_deref(), Some("Shore"));
+    press(&mut app, root, DockAction::Tile(0, 5));
+    double_click(&mut app, root, DockAction::ActiveSet(1));
+    let (field, _, prefill) = name_field(&mut app, root).expect("the field opens");
+    assert_eq!(
+        (field, prefill.as_str()),
+        (NameField::RenameSet(1), "Shore")
+    );
+    input(&mut app, "input.text text=Coast");
+    input(&mut app, "input.key key=Enter");
+    assert_eq!(on_disk(&dir).terrain_sets[1].name, "Coast");
+    assert_eq!(view(&app).active.as_deref(), Some("Coast"), "still active");
+
+    let (before, count) = (on_disk(&dir), entries(&app));
+    let labels = row_menu(&mut app, root, DockAction::ActiveSet(1), Some("Delete"));
+    assert_eq!(labels, ["Rename", "Delete"]);
+    let after = on_disk(&dir);
+    assert_eq!(after.terrain_sets.len(), 1);
+    assert!(
+        after.terrains.iter().all(|t| t.name != "sand"),
+        "its terrain goes too"
+    );
+    assert_eq!(entries(&app), count + 1);
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir), before);
 }
 
 /// The screen rect of `entity`, in logical pixels.
@@ -955,13 +1125,12 @@ fn the_keys_leave_with_the_tab_that_had_them() {
 }
 
 #[test]
-fn the_new_terrain_button_builds_the_dock_once() {
+fn add_terrain_builds_the_dock_once() {
     let (mut app, _dir) = handmade();
     count_builds(&mut app);
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Tile(0, 6));
     let built = builds(&app);
-    press(&mut app, root, DockAction::NewTerrain);
+    press(&mut app, root, DockAction::AddTerrain);
     assert!(name_field(&mut app, root).is_some());
     assert_eq!(builds(&app) - built, 1, "one build");
 }
@@ -971,11 +1140,12 @@ fn the_selected_tile_becomes_the_brush_terrains_icon() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
     press(&mut app, root, DockAction::Brush(WATER));
-    let button = control(&mut app, root, DockAction::SetIcon(WATER));
-    assert!(disabled(&app, button), "no tile yet");
+    let icon = "Use selected tile as icon";
+    let labels = row_menu(&mut app, root, DockAction::Brush(WATER), None);
+    assert!(!labels.iter().any(|l| l == icon), "no tile yet: {labels:?}");
     press(&mut app, root, DockAction::Tile(0, 9));
     let count = entries(&app);
-    press(&mut app, root, DockAction::SetIcon(WATER));
+    row_menu(&mut app, root, DockAction::Brush(WATER), Some(icon));
     let water = (on_disk(&dir).terrains.into_iter()).find(|t| t.id == WATER);
     assert_eq!(water.and_then(|t| t.icon), Some((0, 9)));
     assert_eq!(entries(&app), count + 1);
@@ -987,27 +1157,6 @@ fn the_selected_tile_becomes_the_brush_terrains_icon() {
         WATER,
         "another terrain's removal keeps the brush"
     );
-}
-
-#[test]
-fn each_terrain_set_row_has_a_remove_button() {
-    let (mut app, dir) = handmade();
-    let (_, root) = opened(&mut app);
-    let remove = control(&mut app, root, DockAction::RemoveSet(0));
-    let tip = app
-        .world()
-        .get::<jackdaw_feathers::tooltip::Tooltip>(remove)
-        .map(|t| t.title.clone());
-    assert_eq!(tip.as_deref(), Some("Remove terrain set"));
-
-    let (before, count) = (on_disk(&dir), entries(&app));
-    press(&mut app, root, DockAction::RemoveSet(0));
-    assert!(on_disk(&dir).terrain_sets.is_empty());
-    assert_eq!(entries(&app), count + 1);
-    assert!(!actions(&mut app, root).contains(&DockAction::RemoveSet(0)));
-    run(&mut app, "history.undo");
-    settle(&mut app);
-    assert_eq!(on_disk(&dir), before);
 }
 
 #[test]
@@ -1060,7 +1209,7 @@ fn removing_a_set_clears_its_view_state_only_when_it_goes() {
     let mut permissions = std::fs::metadata(&file).expect("the folder").permissions();
     permissions.set_readonly(true);
     std::fs::set_permissions(&file, permissions.clone()).expect("read only");
-    press(&mut app, root, DockAction::RemoveSet(0));
+    row_menu(&mut app, root, DockAction::ActiveSet(0), Some("Delete"));
     assert_eq!(on_disk(&dir).terrain_sets.len(), 1, "the write failed");
     assert_eq!(
         view(&app).active,
@@ -1075,58 +1224,39 @@ fn removing_a_set_clears_its_view_state_only_when_it_goes() {
     )]
     permissions.set_readonly(false);
     std::fs::set_permissions(&file, permissions).expect("writable");
-    press(&mut app, root, DockAction::RemoveSet(0));
+    row_menu(&mut app, root, DockAction::ActiveSet(0), Some("Delete"));
     assert!(on_disk(&dir).terrain_sets.is_empty());
     assert_eq!(view(&app).active, None);
     assert!(!view(&app).expanded.contains(&pair));
 }
 
 #[test]
-fn a_set_row_keeps_its_remove_button_inside_a_narrow_dock() {
+fn a_set_header_keeps_its_mode_picker_inside_a_narrow_dock() {
     let (mut app, _dir) = handmade();
-    let long = "averyveryverylongterrainnamethatdoesnotwrapanywhere";
-    call(
-        &mut app,
-        "tileset.terrain.rename",
-        &[("terrain", "2"), ("name", long)],
-    );
+    let long = "averyveryverylongterrainsetnamethatdoesnotwrapanywhere";
+    call(&mut app, "tileset.terrain_set.add", &[("name", long)]);
     let (_, root) = opened(&mut app);
     set_width(&mut app, 700);
-    let dock = screen_rect(&app, root);
-    let remove = control(&mut app, root, DockAction::RemoveSet(0));
-    let button = screen_rect(&app, remove);
+    let picks: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &SetModePick)>()
+        .iter(app.world())
+        .filter(|(_, p)| p.root == root && p.set == 1)
+        .map(|(e, _)| e)
+        .collect();
+    let picker = screen_rect(&app, picks[0]);
+    let column = pane(&mut app, root, Pane::List);
     assert!(
-        button.max.x <= dock.max.x + 0.5 && button.min.x >= dock.min.x - 0.5,
-        "the button at {button:?} stays inside the dock at {dock:?}"
+        picker.max.x <= column.max.x + 0.5,
+        "the picker at {picker:?} stays inside its column at {column:?}"
     );
-    let holder = app
-        .world()
-        .get::<ChildOf>(remove)
-        .expect("a holder")
-        .parent();
-    let column = app
-        .world()
-        .get::<ChildOf>(holder)
-        .expect("a column")
-        .parent();
-    let column = screen_rect(&app, column);
-    assert!(
-        button.max.x <= column.max.x + 0.5,
-        "the button at {button:?} stays inside its column at {column:?}"
-    );
-    let pick = control(&mut app, root, DockAction::ActiveSet(0));
+    let pick = control(&mut app, root, DockAction::ActiveSet(1));
     let node = app.world().get::<Node>(pick).expect("a node");
     assert_eq!(
         (node.min_width, node.flex_shrink > 0.0),
         (Val::Px(0.0), true),
-        "the set line gives way before the button"
+        "the name gives way before the picker"
     );
-}
-
-fn disabled(app: &App, entity: Entity) -> bool {
-    app.world()
-        .get::<bevy::ui::InteractionDisabled>(entity)
-        .is_some()
 }
 
 fn pane(app: &mut App, root: Entity, pane: Pane) -> Rect {
@@ -1186,10 +1316,9 @@ fn picking_a_terrain_or_a_set_keeps_every_row_in_place() {
     let (mut app, _dir) = handmade();
     let (_, root) = opened(&mut app);
     let rows = [
-        DockAction::Brush(0),
         DockAction::Brush(GRASS),
         DockAction::Brush(WATER),
-        DockAction::ActiveSet(0),
+        DockAction::AddTerrain,
     ];
     let places = |app: &mut App| -> Vec<Rect> {
         (rows.iter())
@@ -1204,7 +1333,6 @@ fn picking_a_terrain_or_a_set_keeps_every_row_in_place() {
         DockAction::Brush(WATER),
         DockAction::Tile(0, 5),
         DockAction::ToggleMissing(0),
-        DockAction::RenameTerrain(WATER),
         DockAction::Brush(GRASS),
     ] {
         press(&mut app, root, action);
@@ -1223,7 +1351,7 @@ fn the_header_names_no_keys_and_its_tooltips_do() {
     let (mut app, _dir) = handmade();
     let (_, root) = opened(&mut app);
     let shown = texts(&mut app, root);
-    for label in ["Tiles", "Terrains", "Objects", "New terrain"] {
+    for label in ["Tiles", "Terrains", "Objects", "Add terrain"] {
         assert!(shown.iter().any(|t| t == label), "{label}: {shown:?}");
     }
     let keyed = |t: &String| {
@@ -1235,7 +1363,7 @@ fn the_header_names_no_keys_and_its_tooltips_do() {
     for (action, key) in [
         (DockAction::Mode(ModeId::TILES), ""),
         (DockAction::Mode(ModeId::TERRAINS), ""),
-        (DockAction::NewTerrain, "N"),
+        (DockAction::AddTerrain, ""),
     ] {
         let entity = control(&mut app, root, action);
         let tip = app.world().get::<Tooltip>(entity).cloned();
@@ -1248,24 +1376,13 @@ fn the_header_names_no_keys_and_its_tooltips_do() {
 #[test]
 fn match_modes_and_coverage_read_as_words() {
     let (mut app, _dir) = handmade();
-    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
+    call(&mut app, "tileset.terrain_set.add", &[("name", "Shore")]);
     settle(&mut app);
     let (_, root) = opened(&mut app);
     let shown = texts(&mut app, root);
-    assert!(
-        shown.iter().any(|t| t == "Corners and sides"),
-        "the default mode pick: {shown:?}"
-    );
-    assert!(
-        shown
-            .iter()
-            .any(|t| t == "Terrain set 1 (Corners): 1 of 16 shapes"),
-        "{shown:?}"
-    );
-    assert!(
-        shown.iter().any(|t| t == "Corners: 15 shapes missing"),
-        "{shown:?}"
-    );
+    for word in ["Corners", "Corners and sides", "Corners: 15 shapes missing"] {
+        assert!(shown.iter().any(|t| t == word), "{word}: {shown:?}");
+    }
     for raw in ["corners_and_sides", "CornersAndSides", "1/16", "TERRAINS"] {
         assert!(!shown.iter().any(|t| t.contains(raw)), "{raw}: {shown:?}");
     }
@@ -1276,7 +1393,7 @@ fn the_name_field_commits_when_it_loses_the_keyboard() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
     press(&mut app, root, DockAction::Tile(0, 5));
-    press(&mut app, root, DockAction::NewTerrain);
+    input(&mut app, "input.key key=KeyN");
     assert!(name_field(&mut app, root).is_some());
     let count = entries(&app);
     input(&mut app, "input.text text=dirt");
@@ -1299,7 +1416,7 @@ fn a_click_elsewhere_commits_the_typed_name_first() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
     press(&mut app, root, DockAction::Tile(0, 5));
-    press(&mut app, root, DockAction::NewTerrain);
+    input(&mut app, "input.key key=KeyN");
     input(&mut app, "input.text text=dirt");
     let count = entries(&app);
     press(&mut app, root, DockAction::Tile(0, 9));
@@ -1309,41 +1426,6 @@ fn a_click_elsewhere_commits_the_typed_name_first() {
     assert_eq!(entries(&app), count + 1);
     assert_eq!(view(&app).selected, Some((0, 9)), "then the click");
     assert_eq!(name_field(&mut app, root), None);
-}
-
-#[test]
-fn dock_tooltips_follow_a_rebound_key() {
-    use jackdaw_api_internal::lifecycle::OperatorAction;
-    use jackdaw_input::{Binding, BindingOf, ModKeys};
-    let (mut app, _dir) = handmade();
-    let (_, root) = opened(&mut app);
-    let actions: Vec<Entity> = app
-        .world_mut()
-        .query::<(Entity, &OperatorAction)>()
-        .iter(app.world())
-        .filter(|(_, a)| a.0 == "tileset.terrain.from_tile")
-        .map(|(e, _)| e)
-        .collect();
-    assert!(!actions.is_empty(), "the new terrain key has an action");
-    let old: Vec<Entity> = app
-        .world_mut()
-        .query::<(Entity, &BindingOf)>()
-        .iter(app.world())
-        .filter(|(_, b)| actions.contains(&b.0))
-        .map(|(e, _)| e)
-        .collect();
-    for binding in old {
-        app.world_mut().entity_mut(binding).despawn();
-    }
-    let key = Binding::Keyboard {
-        key: KeyCode::KeyQ,
-        mod_keys: ModKeys::empty(),
-    };
-    app.world_mut().spawn((key, BindingOf(actions[0])));
-    settle(&mut app);
-    let new = control(&mut app, root, DockAction::NewTerrain);
-    let tip = app.world().get::<Tooltip>(new).map(|t| t.keybind.clone());
-    assert_eq!(tip.as_deref(), Some("Q"));
 }
 
 #[test]
@@ -1372,4 +1454,60 @@ fn the_object_hint_names_the_sheet_of_a_tileset_with_several() {
         shown.iter().any(|t| t == "Sheet 2, tiles 0 to 1"),
         "{shown:?}"
     );
+}
+
+/// The editable entity and text of the picked terrain's name field.
+fn picked_field(app: &mut App, root: Entity) -> (Entity, String) {
+    let holder = app
+        .world_mut()
+        .query::<(Entity, &TerrainNameField)>()
+        .iter(app.world())
+        .find(|(_, f)| f.root == root && matches!(f.field, NameField::Picked(_)))
+        .map(|(e, _)| e)
+        .expect("a picked terrain block");
+    let mut stack = vec![holder];
+    while let Some(entity) = stack.pop() {
+        if let Some(editable) = app.world().get::<bevy::text::EditableText>(entity) {
+            return (entity, editable.value().into_owned());
+        }
+        stack.extend(app.world().get::<Children>(entity).into_iter().flatten());
+    }
+    panic!("the field has an editable text");
+}
+
+#[test]
+fn escape_in_the_picked_name_puts_it_back_and_a_later_click_renames_nothing() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Brush(WATER));
+    let (editable, shown) = picked_field(&mut app, root);
+    assert_eq!(shown, "water");
+    app.world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(editable, bevy::input_focus::FocusCause::Pressed);
+    let (before, count) = (on_disk(&dir), entries(&app));
+    input(&mut app, "input.text text=xyz");
+    input(&mut app, "input.key key=Escape");
+    assert_eq!(picked_field(&mut app, root).1, "water", "the name is back");
+    press(&mut app, root, DockAction::Tile(0, 5));
+    assert_eq!((on_disk(&dir), entries(&app)), (before, count));
+
+    let (editable, _) = picked_field(&mut app, root);
+    app.world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .set(editable, bevy::input_focus::FocusCause::Pressed);
+    input(&mut app, "input.text text=s");
+    input(&mut app, "input.key key=Enter");
+    assert_eq!(on_disk(&dir).terrains[1].name, "waters");
+    assert_eq!(entries(&app), count + 1);
+}
+
+#[test]
+fn a_rename_in_the_row_is_not_undone_by_the_picked_block() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    double_click(&mut app, root, DockAction::Brush(WATER));
+    input(&mut app, "input.text text=lake");
+    press(&mut app, root, DockAction::Tile(0, 5));
+    assert_eq!(on_disk(&dir).terrains[1].name, "lake");
 }

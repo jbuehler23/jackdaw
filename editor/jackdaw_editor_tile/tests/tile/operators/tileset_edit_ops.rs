@@ -111,7 +111,7 @@ pub(crate) fn refused(
 /// Every transition the tileset's sets hold, upper terrain first: each
 /// terrain of a set above each one below it, or on empty in a set of one.
 pub(crate) fn pairs(tileset: &Tileset) -> Vec<(u8, u8)> {
-    let mut pairs: Vec<(u8, u8)> = (tileset.sets().iter())
+    let mut pairs: Vec<(u8, u8)> = (tileset.terrain_sets.iter())
         .flat_map(|s| match s.terrains.as_slice() {
             [only] => vec![(*only, 0)],
             terrains => (1..terrains.len())
@@ -247,7 +247,15 @@ fn terrain_remove_empties_its_peers_and_drops_its_sets() {
     assert!(after.terrains.iter().all(|t| t.id != GROUND));
     assert_eq!(
         pairs(&after),
-        [(5, 6), (WATER, GRASS), (WATER, 9), (12, 9), (12, WATER)]
+        [
+            (5, 6),
+            (7, GRASS),
+            (7, WATER),
+            (WATER, GRASS),
+            (WATER, 9),
+            (12, 9),
+            (12, WATER)
+        ]
     );
     assert!(after.tiles.iter().all(|t| !t.peers.contains(&GROUND)));
     assert!(peers_of(&after, ground_tile).expect("kept").contains(&0));
@@ -328,7 +336,15 @@ fn terrain_merge_folds_one_terrain_into_another() {
     assert_eq!(after.terrains.len(), 7);
     assert_eq!(
         pairs(&after),
-        [(GROUND, GRASS), (5, 6), (9, GROUND), (12, GROUND), (12, 9)]
+        [
+            (GROUND, GRASS),
+            (5, 6),
+            (7, GRASS),
+            (7, GROUND),
+            (9, GROUND),
+            (12, GROUND),
+            (12, 9)
+        ]
     );
     assert!(after.tiles.iter().all(|t| !t.peers.contains(&WATER)));
     let (_, after) = edit(
@@ -634,17 +650,43 @@ fn a_terrain_set_is_renamed_to_a_free_name() {
 }
 
 #[test]
-fn terrains_join_leave_and_move_within_a_terrain_set() {
+fn a_terrain_moves_between_sets_and_within_its_set() {
     let (mut app, dir) = project_app();
     import(&mut app, &[("paths", SHEET)]);
     for name in ["grass", "dirt", "water"] {
         call(&mut app, "tileset.terrain.add", &[("name", name)]);
     }
-    call(&mut app, "tileset.terrain_set.add", &[("mode", "corners")]);
+    let tileset = on_disk(&dir);
+    assert_eq!(
+        tileset.terrain_sets.len(),
+        1,
+        "the first terrain made a set"
+    );
+    let first = &tileset.terrain_sets[0];
+    assert_eq!(
+        (first.name.as_str(), first.mode, first.terrains.as_slice()),
+        (
+            "Terrain set 1",
+            TerrainMatch::CornersAndSides,
+            &[1, 2, 3][..]
+        )
+    );
+
+    call(&mut app, "tileset.terrain_set.add", &[("mode", "sides")]);
     let join = "tileset.terrain_set.add_terrain";
-    let (_, after) = edit(&mut app, &dir, join, &[("set", "0"), ("terrain", "grass")]);
-    assert_eq!(after.terrain_sets[0].terrains, [1]);
-    edit(&mut app, &dir, join, &[("set", "0"), ("terrain", "water")]);
+    let (_, after) = edit(&mut app, &dir, join, &[("set", "1"), ("terrain", "dirt")]);
+    let held: Vec<_> = (after.terrain_sets.iter())
+        .map(|s| s.terrains.clone())
+        .collect();
+    assert_eq!(held, [vec![1, 3], vec![2]], "dirt left its old set");
+    assert!(after.removed_terrain_sets.contains(&[2, 1]));
+    let (before, count) = (on_disk(&dir), entries(&app));
+    call(&mut app, join, &[("set", "1"), ("terrain", "dirt")]);
+    assert_eq!(
+        (on_disk(&dir), entries(&app)),
+        (before, count),
+        "already there"
+    );
     let (_, after) = edit(
         &mut app,
         &dir,
@@ -652,14 +694,7 @@ fn terrains_join_leave_and_move_within_a_terrain_set() {
         &[("set", "Terrain set 1"), ("terrain", "dirt"), ("at", "1")],
     );
     assert_eq!(after.terrain_sets[0].terrains, [1, 2, 3], "dirt between");
-    call(&mut app, "tileset.terrain_set.add", &[("mode", "sides")]);
-    refused(
-        &mut app,
-        &dir,
-        join,
-        &[("set", "1"), ("terrain", "dirt")],
-        "already belongs to terrain set \"Terrain set 1\"",
-    );
+    assert!(after.terrain_sets[1].terrains.is_empty());
     refused(
         &mut app,
         &dir,
@@ -682,28 +717,54 @@ fn terrains_join_leave_and_move_within_a_terrain_set() {
         &[("set", "1"), ("terrain", "grass"), ("to", "0")],
         "does not hold terrain \"grass\"",
     );
+}
 
+#[test]
+fn a_terrain_added_to_a_named_set_joins_it_on_top() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
+    call(&mut app, "tileset.terrain_set.add", &[("name", "Water")]);
     let (_, after) = edit(
         &mut app,
         &dir,
-        "tileset.terrain_set.remove_terrain",
-        &[("set", "0"), ("terrain", "water")],
+        "tileset.terrain.add",
+        &[("name", "sea"), ("set", "Water")],
     );
-    assert_eq!(after.terrain_sets[0].terrains, [2, 1]);
-    assert!(after.removed_terrain_sets.contains(&[3, 2]));
-    let (_, after) = edit(&mut app, &dir, join, &[("set", "1"), ("terrain", "water")]);
-    assert_eq!(
-        after.terrain_sets[1].terrains,
-        [3],
-        "free to join another set"
-    );
+    assert_eq!(after.terrain_sets[1].terrains, [2]);
+    assert_eq!(after.terrain_sets[0].terrains, [1]);
     refused(
         &mut app,
         &dir,
-        "tileset.terrain_set.remove_terrain",
-        &[("set", "0"), ("terrain", "water")],
-        "does not hold terrain \"water\"",
+        "tileset.terrain.add",
+        &[("name", "reef"), ("set", "Nowhere")],
+        "no terrain set is `Nowhere`",
     );
+}
+
+#[test]
+fn a_terrain_color_changes_in_one_undo_step() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
+    let count = entries(&app);
+    let (before, after) = edit(
+        &mut app,
+        &dir,
+        "tileset.terrain.set_color",
+        &[("terrain", "grass"), ("color", "#3366ff")],
+    );
+    assert_eq!(after.terrains[0].swatch.to_hex(), "#3366FF");
+    assert_eq!(entries(&app), count + 1);
+    refused(
+        &mut app,
+        &dir,
+        "tileset.terrain.set_color",
+        &[("terrain", "grass"), ("color", "blue")],
+        "#rrggbb",
+    );
+    run(&mut app, "history.undo");
+    assert_eq!(on_disk(&dir), before);
 }
 
 #[test]
@@ -855,11 +916,11 @@ fn the_terrain_operators_run_over_the_remote() {
                 json!({ "from": "wet", "into": "2" }),
             ),
             (
-                "tileset.terrain_set.remove_terrain",
-                json!({ "set": "Pools", "terrain": "pond" }),
+                "tileset.terrain.set_color",
+                json!({ "terrain": "pond", "color": "#2244aa" }),
             ),
-            ("tileset.terrain_set.remove", json!({ "set": "Pools" })),
             ("tileset.terrain.remove", json!({ "terrain": "pond" })),
+            ("tileset.terrain_set.remove", json!({ "set": "Pools" })),
         ],
     );
     let tileset = on_disk(&dir);
@@ -1038,21 +1099,25 @@ fn quotes_and_control_characters_cannot_name_a_terrain() {
 }
 
 #[test]
-fn terrain_set_remove_drops_the_set_and_keeps_the_bits() {
+fn terrain_set_remove_drops_the_set_and_the_terrains_only_it_holds() {
     let (mut app, dir) = overworld();
     let start = on_disk(&dir);
     let first = start.terrain_sets[0].clone();
-    let within = |t: &jackdaw_tileset::TilesetTile| {
-        [t.set_inner, t.set_outer]
+    let elsewhere = |id: &u8| {
+        start.terrain_sets[1..]
             .iter()
-            .all(|id| *id == 0 || first.terrains.contains(id))
+            .any(|s| s.terrains.contains(id))
     };
-    let held: Vec<u32> = (start.tiles.iter())
-        .filter(|t| t.set_inner != 0 && within(t))
-        .map(|t| t.tile)
-        .collect();
-    assert!(!held.is_empty(), "the first set holds tiles");
+    let (shared, owned): (Vec<u8>, Vec<u8>) = first.terrains.iter().partition(|id| elsewhere(id));
+    assert!(!shared.is_empty() && !owned.is_empty(), "{first:?}");
+    let painted = |tileset: &Tileset| {
+        (tileset.tiles.iter())
+            .filter(|t| t.peers.iter().any(|p| owned.contains(p)))
+            .count()
+    };
+    assert!(painted(&start) > 0, "the owned terrains are painted");
 
+    let count = entries(&app);
     let (before, after) = edit(
         &mut app,
         &dir,
@@ -1061,24 +1126,17 @@ fn terrain_set_remove_drops_the_set_and_keeps_the_bits() {
     );
     assert_eq!(after.terrain_sets.len(), before.terrain_sets.len() - 1);
     assert!(after.terrain_sets.iter().all(|s| s.name != first.name));
-    for tile in &held {
-        let was = before.tiles.iter().find(|t| t.tile == *tile).expect("was");
-        let now = after.tiles.iter().find(|t| t.tile == *tile).expect("kept");
-        assert_eq!(now.peers, was.peers, "tile {tile} keeps its bits");
-        assert_eq!((now.set_inner, now.set_outer), (0, 0), "tile {tile}");
-    }
-    let lower = first.terrains[0];
-    let upper = first.terrains[1];
-    assert!(after.removed_terrain_sets.contains(&[upper, lower]));
-
-    let name = after.terrain_sets[0].name.clone();
-    let (_, after) = edit(
-        &mut app,
-        &dir,
-        "tileset.terrain_set.remove",
-        &[("set", &name)],
+    assert!((after.terrains.iter()).all(|t| !owned.contains(&t.id)));
+    assert!(
+        shared
+            .iter()
+            .all(|id| after.terrains.iter().any(|t| t.id == *id)),
+        "a terrain another set holds stays"
     );
-    assert!(after.terrain_sets.iter().all(|s| s.name != name));
+    assert_eq!(painted(&after), 0, "the owned terrains' peers are empty");
+    assert_eq!(entries(&app), count + 1);
+    run(&mut app, "history.undo");
+    assert_eq!(on_disk(&dir), before, "one undo brings both back");
 
     let remove = "tileset.terrain_set.remove";
     refused(
@@ -1092,36 +1150,25 @@ fn terrain_set_remove_drops_the_set_and_keeps_the_bits() {
 }
 
 #[test]
-fn adding_a_removed_terrain_back_to_a_set_forgets_the_removal() {
+fn a_terrain_moved_back_to_its_set_forgets_the_removal() {
     let (mut app, dir) = overworld();
     let first = on_disk(&dir).terrain_sets[0].terrains.clone();
-    edit(
-        &mut app,
-        &dir,
-        "tileset.terrain_set.remove",
-        &[("set", "0")],
-    );
+    let top = first.last().copied().expect("a terrain").to_string();
     call(&mut app, "tileset.terrain_set.add", &[("name", "Again")]);
     let join = "tileset.terrain_set.add_terrain";
-    for terrain in &first {
-        let terrain = terrain.to_string();
-        let taken = (on_disk(&dir).terrain_sets.iter())
-            .any(|s| s.terrains.contains(&terrain.parse().expect("an id")));
-        if !taken {
-            call(&mut app, join, &[("set", "Again"), ("terrain", &terrain)]);
-        }
-    }
+    call(&mut app, join, &[("set", "Again"), ("terrain", &top)]);
+    let moved = on_disk(&dir);
+    assert!(
+        !moved.removed_terrain_sets.is_empty(),
+        "the move is remembered"
+    );
+    call(&mut app, join, &[("set", "0"), ("terrain", &top)]);
     let after = on_disk(&dir);
-    let again = after
-        .terrain_sets
-        .iter()
-        .find(|s| s.name == "Again")
-        .expect("added");
-    assert!(!again.terrains.is_empty());
+    let home = &after.terrain_sets[0];
     for [a, b] in &after.removed_terrain_sets {
         let both = [a, b]
             .iter()
-            .all(|id| **id == 0 || again.terrains.contains(id));
+            .all(|id| **id == 0 || home.terrains.contains(id));
         assert!(!both, "{a} with {b} is no longer remembered as removed");
     }
 }

@@ -181,7 +181,7 @@ fn tileset_facts(world: &mut World, path: &str) -> Result<(UVec2, Vec<TerrainMat
     let id = crate::tileset_dock::tileset_id(world, path)?;
     let tileset = (world.resource::<Assets<Tileset>>().get(id))
         .ok_or_else(|| format!("{path} is not loaded yet"))?;
-    let modes = (tileset.sets().iter()).map(|set| set.mode).collect();
+    let modes = (tileset.terrain_sets.iter()).map(|set| set.mode).collect();
     Ok((tileset.tile_size, modes))
 }
 

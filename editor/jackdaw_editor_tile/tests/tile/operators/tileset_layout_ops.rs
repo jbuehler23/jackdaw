@@ -278,7 +278,7 @@ fn describe_reports_the_overworld_tileset_without_history() {
         "  terrain 6 \"Terrain 4\": swatch #4363d8, background",
         "  terrain 11 \"Terrain 7\": swatch #911eb4",
         "terrain sets: 3",
-        "  set \"Terrain set 1\" (CornersAndSides): terrains bottom first [\"Terrain 1\", \"Terrain 2\", \"Terrain 7\"], 65/94 shapes, missing ",
+        "  set \"Terrain set 1\" (CornersAndSides): terrains bottom first [\"Terrain 1\", \"Terrain 2\", \"Terrain 7\", \"Terrain 5\"], 65/94 shapes, missing ",
         "  set \"Terrain set 3\" (Corners): terrains bottom first [\"Terrain 4\", \"Terrain 3\"], 6/16 shapes",
         "flagged tiles: 0",
         "objects: 34",

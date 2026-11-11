@@ -3,7 +3,7 @@
 //! missing shapes.
 
 use crate::operators::tileset_dock::{
-    control, handmade, input, more_menu, opened, press, screen_rect, settle, texts, view,
+    control, handmade, input, more_menu, opened, pick_more, press, screen_rect, settle, texts, view,
 };
 use crate::operators::tileset_edit_ops::{call, entries, on_disk, peers_of, refused, run};
 use crate::operators::tileset_ops::warnings;
@@ -13,11 +13,12 @@ use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_editor_tile::tileset_dock::{DockAction, NewSetPick};
+use jackdaw_editor_tile::tileset_dock::{DockAction, SetModePick};
 use jackdaw_editor_tile::tileset_layout::GhostZones;
 use jackdaw_editor_tile::tileset_modes::ModeId;
 use jackdaw_editor_tile::zone_overlay::{ZoneHover, ZoneOverlay, ZonePiece};
 use jackdaw_feathers::combobox::ComboBoxChangeEvent;
+use jackdaw_tileset::TerrainMatch;
 
 const GRASS: u8 = 1;
 const WATER: u8 = 2;
@@ -120,12 +121,6 @@ fn root_nodes(app: &mut App) -> usize {
         .count()
 }
 
-fn coverage(app: &mut App, root: Entity) -> String {
-    (texts(app, root).into_iter())
-        .find(|t| t.starts_with("Terrain set 1 (Corners):"))
-        .unwrap_or_default()
-}
-
 #[test]
 fn a_drag_across_three_tiles_paints_their_corners_as_one_undo_entry() {
     let (mut app, dir) = handmade();
@@ -208,7 +203,9 @@ fn zones_outside_the_sets_mode_are_left() {
     assert_eq!(peers_of(&on_disk(&dir), 5), None);
     assert_eq!(entries(&app), count + 1, "nothing changed, no entry");
 
-    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
+    call(&mut app, "tileset.terrain_set.add", &[("name", "Shore")]);
+    let shore = [("name", "sand"), ("set", "Shore")];
+    call(&mut app, "tileset.terrain.add", &shore);
     let sand = [("set", "0"), ("terrain", "sand"), ("zones", "0:6:centre")];
     refused(&mut app, &dir, "tileset.tile.paint_bits", &sand, "not in");
     let unset = [
@@ -222,65 +219,6 @@ fn zones_outside_the_sets_mode_are_left() {
         "tileset.tile.paint_bits",
         &unset,
         "terrain set",
-    );
-}
-
-#[test]
-fn a_brush_no_set_holds_paints_nothing_and_says_why() {
-    let (mut app, dir) = handmade();
-    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
-    settle(&mut app);
-    let root = painting(&mut app);
-    press(&mut app, root, DockAction::Brush(SAND));
-    let (before, count) = (on_disk(&dir), entries(&app));
-    let from = on_tile(&mut app, root, 2, Vec2::new(0.15, 0.15));
-    let to = on_tile(&mut app, root, 2, Vec2::new(0.85, 0.15));
-    drag(&mut app, from, to, "primary");
-    assert_eq!(on_disk(&dir), before);
-    assert_eq!(entries(&app), count);
-    let notice = app
-        .world()
-        .resource::<jackdaw_editor_core::status_bar::StatusNotice>();
-    assert!(notice.text().contains("sand"), "{}", notice.text());
-}
-
-#[test]
-fn the_coverage_line_follows_the_stroke_as_it_paints() {
-    let (mut app, _dir) = handmade();
-    let root = painting(&mut app);
-    assert_eq!(
-        coverage(&mut app, root),
-        "Terrain set 1 (Corners): 1 of 16 shapes"
-    );
-    call(
-        &mut app,
-        "tileset.tile.set_bits",
-        &[("tile", "0:1"), ("peers", "2,0,2,0,2,0,0,0,0")],
-    );
-    settle(&mut app);
-    press(&mut app, root, DockAction::Brush(GRASS));
-    let from = on_tile(&mut app, root, 1, Vec2::new(0.15, 0.85));
-    let to = on_tile(&mut app, root, 1, Vec2::new(0.85, 0.85));
-    input(
-        &mut app,
-        &format!("input.pointer x={} y={} action=press", from.x, from.y),
-    );
-    input(
-        &mut app,
-        &format!("input.pointer x={} y={} action=move", to.x, to.y),
-    );
-    assert_eq!(
-        coverage(&mut app, root),
-        "Terrain set 1 (Corners): 2 of 16 shapes",
-        "live, before the stroke ends"
-    );
-    input(
-        &mut app,
-        &format!("input.pointer x={} y={} action=release", to.x, to.y),
-    );
-    assert_eq!(
-        coverage(&mut app, root),
-        "Terrain set 1 (Corners): 2 of 16 shapes"
     );
 }
 
@@ -400,32 +338,6 @@ fn the_zone_under_the_pointer_is_outlined() {
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].0, Some(1), "the outline stays through the redraw");
     assert_ne!(kept[0].1, Display::None);
-}
-
-#[test]
-fn a_zone_painted_with_a_shared_terrain_shows_in_the_set_it_was_painted_in() {
-    let (mut app, _dir) = handmade();
-    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
-    call(&mut app, "tileset.terrain_set.add", &[("mode", "sides")]);
-    for terrain in ["grass", "sand"] {
-        let join = [("set", "1"), ("terrain", terrain)];
-        call(&mut app, "tileset.terrain_set.add_terrain", &join);
-    }
-    let corner = [
-        ("set", "0"),
-        ("terrain", "grass"),
-        ("zones", "0:5:top_left"),
-    ];
-    call(&mut app, "tileset.tile.paint_bits", &corner);
-    assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
-    settle(&mut app);
-    let root = painting(&mut app);
-    press(&mut app, root, DockAction::ActiveSet(0));
-    assert!(
-        marks(&mut app, root).contains(&(5, 0)),
-        "{:?}",
-        marks(&mut app, root)
-    );
 }
 
 #[test]
@@ -557,7 +469,7 @@ fn a_second_button_mid_stroke_is_ignored() {
 }
 
 #[test]
-fn an_erase_with_no_sets_says_nothing_and_changes_nothing() {
+fn an_erase_over_bare_tiles_says_nothing_and_changes_nothing() {
     let (mut app, dir) = crate::operators::tileset_ops::project_app();
     crate::operators::tileset_ops::import(
         &mut app,
@@ -582,12 +494,13 @@ fn an_erase_with_no_sets_says_nothing_and_changes_nothing() {
     );
 }
 
-fn pick_mode(app: &mut App, root: Entity, selected: usize) {
+/// Pick the mode at `selected` in the header of set `set`.
+fn pick_mode(app: &mut App, root: Entity, set: usize, selected: usize) {
     let combo: Vec<Entity> = app
         .world_mut()
-        .query::<(Entity, &NewSetPick)>()
+        .query::<(Entity, &SetModePick)>()
         .iter(app.world())
-        .filter(|(_, p)| p.root == root)
+        .filter(|(_, p)| p.root == root && p.set == set)
         .map(|(e, _)| e)
         .collect();
     assert_eq!(combo.len(), 1, "one mode picker");
@@ -601,37 +514,56 @@ fn pick_mode(app: &mut App, root: Entity, selected: usize) {
 }
 
 #[test]
-fn the_new_set_control_adds_a_set_that_becomes_active() {
+fn a_new_set_from_the_more_menu_takes_the_next_terrain_and_shows_headers() {
     let (mut app, dir) = handmade();
-    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
-    settle(&mut app);
     let (_, root) = opened(&mut app);
-    pick_mode(&mut app, root, 1);
+    assert!(
+        !actions_of(&mut app, root).contains(&DockAction::ActiveSet(0)),
+        "one set, no header"
+    );
     let count = entries(&app);
-    press(&mut app, root, DockAction::CreateSet);
+    pick_more(&mut app, root, "tileset.terrain_set.add");
     let sets: Vec<_> = (on_disk(&dir).terrain_sets.into_iter())
-        .map(|s| (s.name, format!("{:?}", s.mode), s.terrains))
+        .map(|s| (s.name, s.mode, s.terrains))
         .collect();
     assert_eq!(
         sets[1],
-        ("Terrain set 2".to_string(), "Sides".to_string(), vec![]),
+        (
+            "Terrain set 2".to_string(),
+            TerrainMatch::CornersAndSides,
+            vec![]
+        ),
         "{sets:?}"
     );
     assert_eq!(entries(&app), count + 1);
     assert_eq!(view(&app).active.as_deref(), Some("Terrain set 2"));
-
-    press(&mut app, root, DockAction::Brush(SAND));
-    press(&mut app, root, DockAction::AddBrushToSet(1));
-    assert_eq!(on_disk(&dir).terrain_sets[1].terrains, [SAND]);
-    let texts = texts(&mut app, root);
+    let headers = actions_of(&mut app, root);
     assert!(
-        texts
-            .iter()
-            .any(|t| t == "Terrain set 2 (Sides): 0 of 16 shapes"),
-        "{texts:?}"
+        headers.contains(&DockAction::ActiveSet(0)) && headers.contains(&DockAction::ActiveSet(1))
     );
-    press(&mut app, root, DockAction::RemoveFromSet(1, SAND));
-    assert!(on_disk(&dir).terrain_sets[1].terrains.is_empty());
+
+    press(&mut app, root, DockAction::AddTerrain);
+    let after = on_disk(&dir);
+    assert_eq!(after.terrain_sets[1].terrains, [SAND], "into the new set");
+    assert_eq!(view(&app).brush, SAND, "picked for painting");
+
+    pick_mode(&mut app, root, 1, 1);
+    assert_eq!(on_disk(&dir).terrain_sets[1].mode, TerrainMatch::Sides);
+    assert_eq!(entries(&app), count + 3);
+    run(&mut app, "history.undo");
+    assert_eq!(
+        on_disk(&dir).terrain_sets[1].mode,
+        TerrainMatch::CornersAndSides
+    );
+}
+
+fn actions_of(app: &mut App, root: Entity) -> Vec<DockAction> {
+    app.world_mut()
+        .query::<&jackdaw_editor_tile::tileset_dock::DockControl>()
+        .iter(app.world())
+        .filter(|c| c.root == root)
+        .map(|c| c.action)
+        .collect()
 }
 
 #[test]
@@ -697,10 +629,7 @@ fn the_overlay_marks_only_tiles_the_coverage_counts() {
         BTreeSet::from([0]),
         "a tile mixing terrains of two sets is neither's, for the solver and the coverage"
     );
-    assert_eq!(
-        coverage(&mut app, root),
-        "Terrain set 1 (Corners): 1 of 16 shapes"
-    );
+    assert_eq!(summary(&mut app, root), "Corners: 15 shapes missing");
 }
 
 fn summary(app: &mut App, root: Entity) -> String {
@@ -747,4 +676,142 @@ fn the_missing_shapes_follow_the_stroke_as_it_paints() {
     assert_eq!(glyphs(&mut app, root), 14, "live, before the stroke ends");
     pointer(&mut app, to, "release", "primary");
     assert_eq!(summary(&mut app, root), "Corners: 14 shapes missing");
+}
+
+#[test]
+fn a_new_user_adds_a_terrain_and_paints_it_without_meeting_a_set() {
+    let (mut app, dir) = crate::operators::tileset_ops::project_app();
+    crate::operators::tileset_ops::import(
+        &mut app,
+        &[("paths", crate::operators::tileset_ops::SHEET)],
+    );
+    settle(&mut app);
+    let root = painting(&mut app);
+    let shown = texts(&mut app, root);
+    assert!(
+        shown
+            .iter()
+            .any(|t| t == "Add a terrain to paint it on the tiles"),
+        "{shown:?}"
+    );
+    press(&mut app, root, DockAction::AddTerrain);
+    input(&mut app, "input.key key=Enter");
+    let tileset = on_disk(&dir);
+    assert_eq!(tileset.terrain_sets.len(), 1);
+    assert_eq!(tileset.terrain_sets[0].name, "Terrain set 1");
+    assert_eq!(tileset.terrain_sets[0].mode, TerrainMatch::CornersAndSides);
+    let shown = texts(&mut app, root);
+    assert!(
+        !shown.iter().any(|t| t.to_lowercase().contains("set")),
+        "{shown:?}"
+    );
+    assert!(
+        shown
+            .iter()
+            .any(|t| t == "Click corners and sides on the tiles to paint Terrain 1"),
+        "{shown:?}"
+    );
+    let from = on_tile(&mut app, root, 4, Vec2::new(0.15, 0.15));
+    let to = on_tile(&mut app, root, 4, Vec2::new(0.85, 0.15));
+    drag(&mut app, from, to, "primary");
+    let peers = peers_of(&on_disk(&dir), 4).expect("painted");
+    assert!(peers.contains(&1), "{peers:?}");
+}
+
+#[test]
+fn the_brush_paints_in_its_own_set_whatever_header_was_clicked() {
+    let (mut app, dir) = handmade();
+    call(
+        &mut app,
+        "tileset.terrain_set.add",
+        &[("name", "Shore"), ("mode", "corners")],
+    );
+    call(
+        &mut app,
+        "tileset.terrain.add",
+        &[("name", "sand"), ("set", "Shore")],
+    );
+    settle(&mut app);
+    let root = painting(&mut app);
+    press(&mut app, root, DockAction::Brush(WATER));
+    press(&mut app, root, DockAction::ActiveSet(1));
+    assert_eq!(view(&app).brush, 0, "a header picks its set, not water");
+    assert_eq!(view(&app).active.as_deref(), Some("Shore"));
+    press(&mut app, root, DockAction::Brush(WATER));
+    assert_eq!(view(&app).active.as_deref(), Some("Terrain set 1"));
+
+    let join = [("set", "Shore"), ("terrain", "water")];
+    call(&mut app, "tileset.terrain_set.add_terrain", &join);
+    settle(&mut app);
+    assert_eq!(
+        view(&app).active.as_deref(),
+        Some("Shore"),
+        "the active set follows the brush's move"
+    );
+    let from = on_tile(&mut app, root, 1, Vec2::new(0.15, 0.15));
+    let to = on_tile(&mut app, root, 1, Vec2::new(0.85, 0.15));
+    drag(&mut app, from, to, "primary");
+    let peers = peers_of(&on_disk(&dir), 1).expect("painted");
+    assert!(peers.contains(&WATER), "{peers:?}");
+    run(&mut app, "history.undo");
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(
+        view(&app).active.as_deref(),
+        Some("Terrain set 1"),
+        "an undone move takes it back"
+    );
+}
+
+#[test]
+fn painting_a_sheet_outside_setup_brings_it_under_setup_in_the_same_undo_step() {
+    let (mut app, dir) = crate::operators::tileset_ops::project_app();
+    crate::operators::tileset_ops::import(
+        &mut app,
+        &[
+            ("paths", crate::operators::tileset_ops::SHEET),
+            ("setup", "none"),
+        ],
+    );
+    settle(&mut app);
+    assert!(on_disk(&dir).setup_sheets.is_empty());
+    let root = painting(&mut app);
+    press(&mut app, root, DockAction::AddTerrain);
+    input(&mut app, "input.key key=Enter");
+    let (before, count) = (on_disk(&dir), entries(&app));
+    let from = on_tile(&mut app, root, 4, Vec2::new(0.15, 0.15));
+    let to = on_tile(&mut app, root, 4, Vec2::new(0.85, 0.15));
+    drag(&mut app, from, to, "primary");
+    let after = on_disk(&dir);
+    assert_eq!(after.setup_sheets, [0], "the sheet is under setup");
+    let peers = peers_of(&after, 4).expect("painted");
+    assert!(peers.contains(&1), "{peers:?}");
+    assert_eq!(entries(&app), count + 1, "one undo entry");
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir), before, "one undo reverts both");
+}
+
+#[test]
+fn a_bit_set_on_a_sheet_outside_setup_brings_it_under_setup() {
+    let (mut app, dir) = crate::operators::tileset_ops::project_app();
+    crate::operators::tileset_ops::import(
+        &mut app,
+        &[
+            ("paths", crate::operators::tileset_ops::SHEET),
+            ("setup", "none"),
+        ],
+    );
+    call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
+    let before = on_disk(&dir);
+    call(
+        &mut app,
+        "tileset.tile.set_bits",
+        &[("tile", "0:4"), ("peer", "top_left"), ("terrain", "grass")],
+    );
+    let after = on_disk(&dir);
+    assert_eq!(after.setup_sheets, [0]);
+    assert_eq!(peers_of(&after, 4).map(|p| p[0]), Some(1));
+    run(&mut app, "history.undo");
+    assert_eq!(on_disk(&dir), before);
 }
