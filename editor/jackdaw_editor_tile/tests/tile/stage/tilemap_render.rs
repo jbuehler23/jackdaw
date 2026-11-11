@@ -590,7 +590,7 @@ pub(crate) fn corner_pair(app: &App) -> (TerrainId, TerrainId) {
         .next()
         .map(|(_, t)| t.clone())
         .expect("the tileset");
-    (tileset.sets().iter())
+    (tileset.terrain_sets.iter())
         .find(|set| set.mode == TerrainMatch::Corners && set.terrains.len() == 2)
         .map(|set| (set.terrains[1], set.terrains[0]))
         .expect("a corners set")

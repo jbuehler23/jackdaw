@@ -34,13 +34,6 @@ pub struct MissingGlyph {
     pub set: usize,
 }
 
-/// The coverage line of the terrain set at index `set`.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct CoverageLine {
-    pub root: Entity,
-    pub set: usize,
-}
-
 /// The missing shape summary of the active terrain set at index `set`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct CoverageSummary {
@@ -120,18 +113,6 @@ fn zone_list(tileset: &Tileset, text: &str) -> Result<Vec<(TileAddress, Peer)>, 
             Ok((address, peer(which)?))
         })
         .collect()
-}
-
-/// The coverage line of the terrain set at index `set` and its coverage.
-pub(crate) fn coverage_line(setup: &TilesetSetup, set: usize) -> Option<(String, Coverage)> {
-    let coverage = setup.coverage(set).ok()?;
-    let name = &setup.sets.get(set)?.name;
-    let mode = mode_word(coverage.mode);
-    let line = format!(
-        "{name} ({mode}): {} of {} shapes",
-        coverage.covered, coverage.total
-    );
-    Some((line, coverage))
 }
 
 /// How many shapes of its layout a set misses, with its mode.
@@ -240,8 +221,8 @@ fn shows(setup: &TilesetSetup, active: usize, tile: &SetupTile) -> bool {
         || (painted.clone().count() > 0 && painted.into_iter().all(|id| set.terrains.contains(id)))
 }
 
-/// The zones of sheet `sheet` held by tiles of the active set, the brush
-/// terrain picked.
+/// The zones of sheet `sheet` held by tiles of the set the dock paints in,
+/// the brush terrain picked.
 fn terrain_zones(
     tileset: &Tileset,
     setup: &TilesetSetup,
@@ -249,7 +230,7 @@ fn terrain_zones(
     view: &DockView,
 ) -> Option<ZoneValues> {
     let on = tileset.setup_sheet(sheet).ok()?;
-    let active = view.active_set(&tileset.sets())?;
+    let active = view.paint_set(tileset)?;
     let set = setup.sets.get(active)?;
     let mode = set.mode.value;
     let tiles = (setup.tiles.iter())
@@ -283,7 +264,7 @@ fn terrain_zones(
 }
 
 /// A stroke of the terrains mode: the brush terrain painted on tile zones
-/// in the active set, or erased with the right button.
+/// in its set, or erased with the right button.
 struct BitPaint {
     set: usize,
     mode: MatchMode,
@@ -301,7 +282,7 @@ pub(crate) fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box
     };
     let tileset = start.tileset;
     let setup = tileset.setup().ok()?;
-    let set = (start.view.active_set(&tileset.sets()))
+    let set = (start.view.paint_set(tileset))
         .filter(|s| setup.sets.get(*s).is_some_and(|s| s.has(terrain)));
     let Some((set, mode)) = set.and_then(|s| Some((s, setup.sets.get(s)?.mode.value))) else {
         if terrain != 0 {
@@ -393,11 +374,10 @@ impl BitPaint {
         {
             shown.0 = count;
         }
-        let Some((text, coverage)) = coverage_line(&self.setup, self.set) else {
+        let Ok(coverage) = self.setup.coverage(self.set) else {
             return;
         };
         let set = self.set;
-        retext::<CoverageLine>(world, |l| l.root == root && l.set == set, &text);
         let summary = summary_line(&coverage);
         retext::<CoverageSummary>(world, |l| l.root == root && l.set == set, &summary);
         let rows: Vec<(Entity, MissingShapes)> = (world.query::<(Entity, &MissingShapes)>())

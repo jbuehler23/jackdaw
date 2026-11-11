@@ -140,7 +140,7 @@ fn layer_hint(world: &mut World, layer: &TilemapLayer) -> LayerHint {
 /// with terrain bits. `None` while the tileset is not loaded.
 fn hint_of(tileset: Option<&Tileset>) -> Option<&'static str> {
     let tileset = tileset?;
-    if tileset.sets().is_empty() {
+    if tileset.terrain_sets.is_empty() {
         Some(NO_SETS)
     } else if !(tileset.tiles.iter()).any(|tile| tile.peers.iter().any(|peer| *peer != 0)) {
         Some(NO_BITS)

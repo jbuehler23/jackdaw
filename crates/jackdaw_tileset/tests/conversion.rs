@@ -75,7 +75,7 @@ fn edited_setup(sheet: &Sheet) -> TilesetSetup {
 }
 
 #[test]
-fn a_setup_survives_the_tileset_unchanged() {
+fn a_setup_survives_the_tileset_with_every_terrain_in_a_set() {
     let sheet = Sheet::load();
     let setup = edited_setup(&sheet);
     let mut tileset = tileset();
@@ -85,7 +85,23 @@ fn a_setup_survives_the_tileset_unchanged() {
 
     assert_eq!(tileset.terrains.len(), 8);
     assert_eq!(tileset.terrain_sets.len(), 3);
-    assert_eq!(tileset.setup().expect("converts back"), setup);
+    for terrain in &tileset.terrains {
+        let homes = (tileset.terrain_sets.iter())
+            .filter(|s| s.terrains.contains(&terrain.id))
+            .count();
+        assert!(homes > 0, "{}", terrain.name);
+    }
+    let back = tileset.setup().expect("converts back");
+    assert_eq!((&back.tiles, &back.stamps), (&setup.tiles, &setup.stamps));
+    let modes = |s: &TilesetSetup| -> Vec<_> {
+        (s.sets.iter())
+            .map(|set| (set.name.clone(), set.mode.clone(), set.locked_manual))
+            .collect()
+    };
+    assert_eq!(modes(&back), modes(&setup));
+    let mut twice = tileset.clone();
+    twice.set_setup(&back).expect("converts");
+    assert_eq!(twice, tileset, "a second pass changes nothing");
 }
 
 #[test]
@@ -96,9 +112,7 @@ fn a_rerun_through_the_tileset_keeps_what_the_user_set() {
     tileset.set_setup(&setup).expect("converts");
     let back = tileset.setup().expect("converts back");
 
-    let direct = rerun(&setup, &sheet.inputs(), &Scope::All).expect("rerun");
     let through = rerun(&back, &sheet.inputs(), &Scope::All).expect("rerun");
-    assert_eq!(through, direct);
     assert_eq!(through.terrain(1).expect("grass").name.value, "Grass");
     let kept = &through.tiles[&GRASS_TILE].collision;
     assert!(kept.is_user() && kept.value.iter().any(|c| c.trigger && c.layer == 1));

@@ -524,7 +524,7 @@ fn apply(world: &mut World, root: Entity) -> Result<String, String> {
         .then(|| dock_tileset(world, root))
         .flatten()
         .and_then(|(_, tileset)| {
-            (tileset.sets().iter())
+            (tileset.terrain_sets.iter())
                 .find(|s| s.terrains.contains(&draft.inner))
                 .map(|s| s.name.clone())
         });

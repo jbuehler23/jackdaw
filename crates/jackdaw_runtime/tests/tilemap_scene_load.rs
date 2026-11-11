@@ -378,8 +378,7 @@ jackdaw_tileset::Tileset {
     ],
     terrain_sets: [
         jackdaw_tileset::TilesetTerrainSet {
-            inner: 2,
-            outer: 1,
+            terrains: [1, 2],
             mode: jackdaw_tileset::TerrainMatch::Corners,
         },
     ],

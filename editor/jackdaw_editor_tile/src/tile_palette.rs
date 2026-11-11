@@ -859,7 +859,7 @@ fn centre_tile(tileset: &Tileset, terrain: TerrainId) -> Option<(u32, u32)> {
     const CORNERS: &[usize] = &[0, 2, 6, 8];
     const SIDES: &[usize] = &[1, 3, 4, 5, 7];
     const ALL: &[usize] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
-    let sets = tileset.sets();
+    let sets = &tileset.terrain_sets;
     let used = |inner: TerrainId, outer: TerrainId| {
         let has = |terrains: &[TerrainId], id| id == 0 || terrains.contains(&id);
         let set = (sets.iter()).find(|s| has(&s.terrains, inner) && has(&s.terrains, outer));

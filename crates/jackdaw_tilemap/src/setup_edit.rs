@@ -143,30 +143,17 @@ impl TilesetSetup {
     }
 
     /// Puts terrain `terrain`, which belongs to no set, in the set at `set`
-    /// at stacking position `at` (bottom 0), or on top when `None`.
+    /// at stacking position `at` (bottom 0), or on top when `None`. A terrain
+    /// belongs to one set at most.
     pub fn add_set_terrain(
         &mut self,
         set: usize,
         terrain: TerrainId,
         at: Option<usize>,
     ) -> Result<(), SetupError> {
-        self.join_set(set, terrain, at, false)
-    }
-
-    /// [`Self::add_set_terrain`], letting `terrain` keep sets of other modes
-    /// when `other_modes` is set.
-    pub(crate) fn join_set(
-        &mut self,
-        set: usize,
-        terrain: TerrainId,
-        at: Option<usize>,
-        other_modes: bool,
-    ) -> Result<(), SetupError> {
-        let mode = self.set_mut(set)?.mode.value;
+        self.set_mut(set)?;
         self.known(terrain)?;
-        let clashes =
-            |s: &SetupSet| s.terrains.contains(&terrain) && (!other_modes || s.mode.value == mode);
-        if let Some(other) = (self.sets.iter()).position(clashes) {
+        if let Some(other) = self.set_of(terrain) {
             return Err(SetupError::TerrainInSet {
                 terrain,
                 set: other,
@@ -336,8 +323,7 @@ pub(crate) mod tests {
         TileTerrains::filled(inner).with(Peer::Top, outer)
     }
 
-    /// A new set of `lower` then `upper`, skipping the empty terrain; either
-    /// may keep a set of another mode.
+    /// A new set of `lower` then `upper`, skipping the empty terrain.
     pub(crate) fn pair_set(
         setup: &mut TilesetSetup,
         upper: TerrainId,
@@ -347,8 +333,8 @@ pub(crate) mod tests {
         let set = setup.add_set("", mode).expect("a set");
         for terrain in [lower, upper].into_iter().filter(|t| *t != 0) {
             setup
-                .join_set(set, terrain, None, true)
-                .expect("free in this mode");
+                .add_set_terrain(set, terrain, None)
+                .expect("in no set");
         }
         set
     }

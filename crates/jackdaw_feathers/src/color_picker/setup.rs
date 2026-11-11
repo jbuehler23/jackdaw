@@ -13,7 +13,8 @@ use super::{
 };
 
 use crate::button::{
-    ButtonClickEvent, ButtonContentText, ButtonProps, ButtonVariant, button, button_caption,
+    ButtonClickEvent, ButtonContentText, ButtonProps, ButtonSize, ButtonVariant, button,
+    button_caption,
 };
 use crate::icons::{EditorFont, IconFont};
 use crate::popover::{
@@ -58,15 +59,17 @@ pub(super) fn setup_color_picker(
             let srgba = Srgba::new(rgba[0], rgba[1], rgba[2], rgba[3]);
             let hex = state.to_hex();
 
+            let props = if config.compact {
+                ButtonProps::new("")
+                    .with_size(ButtonSize::IconSM)
+                    .with_variant(ButtonVariant::Ghost)
+            } else {
+                ButtonProps::new(hex)
+                    .with_variant(ButtonVariant::Default)
+                    .align_left()
+            };
             let trigger_entity = commands
-                .spawn((
-                    ColorPickerTrigger(entity),
-                    button(
-                        ButtonProps::new(hex)
-                            .with_variant(ButtonVariant::Default)
-                            .align_left(),
-                    ),
-                ))
+                .spawn((ColorPickerTrigger(entity), button(props)))
                 .id();
 
             commands.entity(entity).add_child(trigger_entity);
@@ -74,6 +77,7 @@ pub(super) fn setup_color_picker(
             commands.entity(trigger_entity).insert(TriggerSwatchConfig {
                 picker: entity,
                 color: srgba,
+                compact: config.compact,
             });
         }
     }
@@ -91,6 +95,27 @@ pub(super) fn setup_trigger_swatch(
 ) {
     let trigger_entity = add.entity;
     if let Ok(config) = triggers.get(trigger_entity) {
+        if config.compact {
+            commands
+                .entity(trigger_entity)
+                .remove::<TriggerSwatchConfig>();
+            commands.spawn_scene(bsn! { @FeathersColorSwatch }).insert((
+                TriggerSwatch,
+                ColorSwatchValue(Color::Srgba(config.color)),
+                ColorSubWidget {
+                    picker: config.picker,
+                    part: ColorPart::Whole,
+                },
+                Node {
+                    width: px(SWATCH_SIZE),
+                    height: px(SWATCH_SIZE),
+                    ..default()
+                },
+                Pickable::IGNORE,
+                ChildOf(trigger_entity),
+            ));
+            return;
+        }
         let Some(caption) = button_caption(trigger_entity, &children, &captions) else {
             return;
         };

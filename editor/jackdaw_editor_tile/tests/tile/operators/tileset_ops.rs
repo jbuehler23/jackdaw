@@ -187,7 +187,7 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
             (
                 "Terrain set 1",
                 TerrainMatch::CornersAndSides,
-                &[1, 2, 11][..]
+                &[1, 2, 11, 7][..]
             ),
             ("Terrain set 2", TerrainMatch::Corners, &[2, 9, 11, 12][..]),
             ("Terrain set 3", TerrainMatch::Corners, &[6, 5][..]),
@@ -197,10 +197,12 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
     let sheet = decoded(util::OVERWORLD_SHEET);
     let image = RgbaImage::new(sheet.width(), sheet.height(), sheet.as_raw()).expect("sized");
     let fresh = auto_setup(&[(SHEET, image)], &[]).expect("auto setup runs");
+    let mut expected = TilesetSetup::from_auto(&fresh);
+    expected.sets[0].terrains.push(7);
     assert_eq!(
         tileset.setup().expect("converts"),
-        TilesetSetup::from_auto(&fresh),
-        "the file holds the whole setup"
+        expected,
+        "the file holds the whole setup, the terrain of plain tiles in the first set"
     );
     let report = reports(&app).join("\n");
     let sea = "  set \"Terrain set 2\" (Corners): terrains bottom first \

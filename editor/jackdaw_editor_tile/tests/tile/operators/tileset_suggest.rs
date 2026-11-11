@@ -12,7 +12,7 @@ use jackdaw_editor_tile::tileset_layout::{GhostZones, LayoutPopover};
 use jackdaw_editor_tile::tileset_modes::ModeId;
 use jackdaw_editor_tile::tileset_suggest::{SuggestionLabel, SuggestionOutline};
 use jackdaw_editor_tile::zone_overlay::ZoneOverlay;
-use jackdaw_tilemap::{LayoutTemplate, Suggestion, SuggestionKind};
+use jackdaw_tilemap::{LayoutTemplate, Placement, Suggestion, SuggestionKind};
 
 const GRASS: u8 = 1;
 const DIRT: u8 = 2;
@@ -164,7 +164,11 @@ fn lay_out_opens_the_popover_with_the_suggestion_preselected() {
     let d = draft(&app);
     assert_eq!((d.origin, d.size), (DIRT_BLOCK, found[dirt].size));
     assert_eq!((d.inner, d.outer), (DIRT, GRASS));
-    assert_eq!(d.pick, None, "a 3x3 with inner corners still asks");
+    assert_eq!(
+        d.pick,
+        Some((LayoutTemplate::Minimal3x3Inner, Placement::OnCells)),
+        "the placement of the set that stacks dirt on grass"
+    );
     assert_eq!(on_disk(&dir), before, "nothing applied");
 
     press(&mut app, root, DockAction::LayoutCancel);
@@ -213,7 +217,7 @@ fn add_object_adds_the_suggested_object() {
 }
 
 #[test]
-fn a_block_of_two_placements_asks_which_one() {
+fn a_block_takes_the_placement_of_the_set_its_terrains_share() {
     let (mut app, _dir) = named();
     let (_, root) = opened(&mut app);
     pick_more(&mut app, root, "tileset.suggest");
@@ -224,7 +228,11 @@ fn a_block_of_two_placements_asks_which_one() {
     });
     press(&mut app, root, DockAction::SuggestionLayOut(corners));
     assert_eq!(popovers(&mut app, root), 1);
-    assert_eq!(draft(&app).pick, None, "a 2x2 asks ground or walls");
+    assert_eq!(
+        draft(&app).pick,
+        Some((LayoutTemplate::Corner2x2, Placement::OnCells)),
+        "the set matches corners and sides"
+    );
 }
 
 #[test]

@@ -6,8 +6,7 @@ use bevy::color::Srgba;
 use bevy::prelude::*;
 use jackdaw_tilemap::{
     GridLayout, MatchMode, Provenance, SetupSet, SetupTerrain, SetupTile, ShapePreset, Stamp,
-    TerrainId, TileAddress, TileCollision, TileTerrains, TilesetSetup, Tracked, free_set_name,
-    group_pairs,
+    TerrainId, TileAddress, TileCollision, TileTerrains, TilesetSetup, Tracked,
 };
 
 #[cfg(feature = "render")]
@@ -55,7 +54,8 @@ pub struct Tileset {
     /// order the setup lists them.
     pub setup_sheets: Vec<u32>,
     pub terrains: Vec<TilesetTerrain>,
-    /// Read through [`Tileset::sets`], which also reads sets saved as pairs.
+    /// Every terrain sits in a set; one set by hand, see
+    /// [`Tileset::set_of`].
     pub terrain_sets: Vec<TilesetTerrainSet>,
     /// Tiles with terrain bits or collision.
     pub tiles: Vec<TilesetTile>,
@@ -125,7 +125,7 @@ pub struct TilesetTerrain {
     pub id: TerrainId,
     pub name: String,
     pub name_by_user: bool,
-    /// Oklab colour that matches it to the terrains of a later auto setup.
+    /// Oklab color that matches it to the terrains of a later auto setup.
     pub oklab: Vec3,
     pub swatch: Srgba,
     pub background: bool,
@@ -144,8 +144,8 @@ pub enum TerrainMatch {
     CornersAndSides,
 }
 
-/// A named terrain set: a match mode and the terrains whose transition tiles
-/// it holds.
+/// A named terrain set: a match mode and the terrains it owns, whose
+/// transition tiles it holds.
 #[derive(Reflect, Clone, Debug, Default, PartialEq)]
 #[reflect(Default)]
 pub struct TilesetTerrainSet {
@@ -158,20 +158,6 @@ pub struct TilesetTerrainSet {
     pub mode_by_user: bool,
     /// Auto setup never changes the set or the tiles it holds.
     pub locked_manual: bool,
-    /// The drawn terrain of a set saved as one transition; [`Tileset::sets`]
-    /// reads such sets into named ones and a save drops it.
-    #[reflect(default)]
-    pub inner: TerrainId,
-    /// The terrain a set saved as one transition draws on.
-    #[reflect(default)]
-    pub outer: TerrainId,
-}
-
-impl TilesetTerrainSet {
-    /// Whether the set was saved as one transition pair.
-    pub fn is_pair(&self) -> bool {
-        self.inner != 0
-    }
 }
 
 #[derive(Reflect, Clone, Debug, Default, PartialEq)]
@@ -381,7 +367,7 @@ impl Tileset {
     /// stamp has been set by the user since.
     pub fn untouched_auto(&self) -> bool {
         let terrains = (self.terrains.iter()).all(|t| !t.name_by_user);
-        let sets = (self.sets().iter()).all(|s| !s.mode_by_user && !s.locked_manual);
+        let sets = (self.terrain_sets.iter()).all(|s| !s.mode_by_user && !s.locked_manual);
         let tiles =
             (self.tiles.iter()).all(|t| !t.collision_by_user && !t.peers_by_user.contains(&true));
         let objects = self.objects.iter().all(|o| !o.by_user);
@@ -403,40 +389,10 @@ impl Tileset {
         self.auto_setup = false;
     }
 
-    /// The terrain sets, with sets saved as one transition pair read into
-    /// named sets: pairs of one mode that share a terrain join one set named
-    /// `Terrain set n`, stacked so each pair's second terrain sits below its
-    /// first, background terrains lowest.
-    pub fn sets(&self) -> Cow<'_, [TilesetTerrainSet]> {
-        if !self.terrain_sets.iter().any(TilesetTerrainSet::is_pair) {
-            return Cow::Borrowed(&self.terrain_sets);
-        }
-        let (pairs, mut sets): (Vec<&TilesetTerrainSet>, Vec<TilesetTerrainSet>) = (
-            self.terrain_sets.iter().filter(|s| s.is_pair()).collect(),
-            (self.terrain_sets.iter())
-                .filter(|s| !s.is_pair())
-                .cloned()
-                .collect(),
-        );
-        let keyed: Vec<_> = (pairs.iter())
-            .map(|s| ((s.inner, s.outer), match_mode(s.mode)))
-            .collect();
-        let background = |id: TerrainId| (self.terrains.iter()).any(|t| t.id == id && t.background);
-        for (next, group) in (1..).zip(group_pairs(&keyed, &background)) {
-            let taken = |name: &str| sets.iter().any(|s| s.name == name);
-            let name = free_set_name(next, taken);
-            let from = || group.pairs.iter().map(|&i| pairs[i]);
-            sets.push(TilesetTerrainSet {
-                name,
-                mode: terrain_match(group.mode),
-                terrains: group.terrains.clone(),
-                mode_by_user: from().any(|s| s.mode_by_user),
-                locked_manual: from().any(|s| s.locked_manual),
-                inner: 0,
-                outer: 0,
-            });
-        }
-        Cow::Owned(sets)
+    /// Index of the set terrain `id` belongs to: the first listing it, since
+    /// auto setup may list a terrain in sets of two match modes.
+    pub fn set_of(&self, id: TerrainId) -> Option<usize> {
+        (self.terrain_sets.iter()).position(|s| id != 0 && s.terrains.contains(&id))
     }
 
     /// The name of terrain `id`, or the id itself when no terrain has it.
@@ -649,7 +605,7 @@ impl Tileset {
         Ok(TilesetSetup {
             sheets,
             terrains: self.terrains.iter().map(setup_terrain).collect(),
-            sets: self.sets().iter().map(setup_set).collect(),
+            sets: self.terrain_sets.iter().map(setup_set).collect(),
             tiles,
             stamps,
             next_id: self.next_terrain_id,
@@ -661,7 +617,9 @@ impl Tileset {
 
     /// Takes the terrain setup `setup` in place of the tileset's. Objects keep
     /// their pivots where a stamp has the same bounds; new ones pivot at the
-    /// bottom centre. Tiles of sheets outside the new setup are kept.
+    /// bottom center. Tiles of sheets outside the new setup are kept. A
+    /// terrain no set lists joins the first set, or a new one matching
+    /// corners and sides when there is none.
     pub fn set_setup(&mut self, setup: &TilesetSetup) -> Result<(), TilesetError> {
         let setup_sheets = (setup.sheets.iter())
             .map(|name| {
@@ -710,6 +668,7 @@ impl Tileset {
             })
             .collect();
         self.terrain_sets = setup.sets.iter().map(tileset_set).collect();
+        self.home_terrains();
         self.removed_terrain_sets = (setup.removed_sets.iter())
             .map(|&(inner, outer)| [inner, outer])
             .collect();
@@ -717,6 +676,29 @@ impl Tileset {
         self.objects = objects;
         self.next_terrain_id = setup.next_id;
         Ok(())
+    }
+}
+
+impl Tileset {
+    /// Puts each terrain no set lists in a set; see [`Tileset::set_setup`].
+    fn home_terrains(&mut self) {
+        let homeless: Vec<TerrainId> = (self.terrains.iter())
+            .map(|t| t.id)
+            .filter(|id| self.set_of(*id).is_none())
+            .collect();
+        if homeless.is_empty() {
+            return;
+        }
+        if self.terrain_sets.is_empty() {
+            self.terrain_sets.push(TilesetTerrainSet {
+                name: jackdaw_tilemap::set_name(1),
+                mode: TerrainMatch::CornersAndSides,
+                ..default()
+            });
+        }
+        if let Some(first) = self.terrain_sets.first_mut() {
+            first.terrains.extend(homeless);
+        }
     }
 }
 
@@ -772,8 +754,6 @@ fn tileset_set(set: &SetupSet) -> TilesetTerrainSet {
         terrains: set.terrains.clone(),
         mode_by_user: set.mode.is_user(),
         locked_manual: set.locked_manual,
-        inner: 0,
-        outer: 0,
     }
 }
 

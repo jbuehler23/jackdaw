@@ -53,7 +53,7 @@ impl Tileset {
             Some(mode) => mode,
             None => self.only_mode()?,
         };
-        let all = self.sets();
+        let all = &self.terrain_sets;
         let sets: Vec<_> = all.iter().filter(|set| set.mode == mode).collect();
         if sets.is_empty() {
             return Err(TerrainSetError::NoSetWithMode(mode));
@@ -102,7 +102,7 @@ impl Tileset {
 
     fn only_mode(&self) -> Result<TerrainMatch, TerrainSetError> {
         let mut modes: Vec<TerrainMatch> = Vec::new();
-        for set in self.sets().iter() {
+        for set in &self.terrain_sets {
             if !modes.contains(&set.mode) {
                 modes.push(set.mode);
             }
