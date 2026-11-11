@@ -5256,7 +5256,7 @@ fn saving_a_prefab_tab_writes_its_terrain_and_tile_sidecars() {
                  jackdaw::prefab::components::Prefab\n\
                  jackdaw::prefab::components::PrefabEntityId(0)\n\
                  jackdaw_scene_types::types::Terrain { resolution: 2, data_path: \"p.terrain-0.jdterrain\" }\n\
-                 jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\" }",
+                 jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\", layers: [jackdaw_scene_types::tilemap::TilemapLayer { name: \"Ground\" }] }",
             ),
         );
     {
@@ -5323,7 +5323,7 @@ fn a_tilemap_inherited_from_a_prefab_keeps_its_sidecar_beside_the_prefab() {
         "#p\n\
          jackdaw::prefab::components::Prefab\n\
          jackdaw::prefab::components::PrefabEntityId(0)\n\
-         jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\" }\n",
+         jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\", layers: [jackdaw_scene_types::tilemap::TilemapLayer { name: \"Ground\" }] }\n",
     )
     .unwrap();
     let map = jackdaw_tilemap::TilemapData {
@@ -5440,7 +5440,7 @@ fn a_scene_map_and_a_prefab_map_of_one_file_name_stay_apart() {
         "#forest\n\
          jackdaw::prefab::components::Prefab\n\
          jackdaw::prefab::components::PrefabEntityId(0)\n\
-         jackdaw_scene_types::tilemap::Tilemap { data_path: \"forest.tilemap-0.jdtiles\" }\n",
+         jackdaw_scene_types::tilemap::Tilemap { data_path: \"forest.tilemap-0.jdtiles\", layers: [jackdaw_scene_types::tilemap::TilemapLayer { name: \"Ground\" }] }\n",
     )
     .unwrap();
     let scene_path = tmp.path().join("levels/forest.bsn");
@@ -5452,7 +5452,7 @@ fn a_scene_map_and_a_prefab_map_of_one_file_name_stay_apart() {
          jackdaw::prefab::components::PrefabEntityId(0)\n\
          --\n\
          #ground\n\
-         jackdaw_scene_types::tilemap::Tilemap { data_path: \"forest.tilemap-0.jdtiles\" }\n\
+         jackdaw_scene_types::tilemap::Tilemap { data_path: \"forest.tilemap-0.jdtiles\", layers: [jackdaw_scene_types::tilemap::TilemapLayer { name: \"Ground\" }] }\n\
          ]\n",
     )
     .unwrap();
@@ -5511,7 +5511,7 @@ fn a_variant_of_a_prefab_holding_a_tilemap_is_refused() {
         "#base\n\
          jackdaw::prefab::components::Prefab\n\
          jackdaw::prefab::components::PrefabEntityId(0)\n\
-         jackdaw_scene_types::tilemap::Tilemap { data_path: \"base.tilemap-0.jdtiles\" }\n",
+         jackdaw_scene_types::tilemap::Tilemap { data_path: \"base.tilemap-0.jdtiles\", layers: [jackdaw_scene_types::tilemap::TilemapLayer { name: \"Ground\" }] }\n",
     )
     .unwrap();
     let bytes = jackdaw_tilemap::encode(&tile_map(1));
@@ -5550,7 +5550,7 @@ fn a_prefab_tab_and_a_scene_instancing_it_share_the_prefabs_cells() {
         "#p\n\
          jackdaw::prefab::components::Prefab\n\
          jackdaw::prefab::components::PrefabEntityId(0)\n\
-         jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\" }\n",
+         jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\", layers: [jackdaw_scene_types::tilemap::TilemapLayer { name: \"Ground\" }] }\n",
     )
     .unwrap();
     let prefab_file = tmp.path().join("prefabs/p.tilemap-0.jdtiles");
@@ -5611,7 +5611,7 @@ fn instances_sharing_a_sidecar_with_different_bounds_are_noted() {
         "#p\n\
          jackdaw::prefab::components::Prefab\n\
          jackdaw::prefab::components::PrefabEntityId(0)\n\
-         jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\" }\n",
+         jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\", layers: [jackdaw_scene_types::tilemap::TilemapLayer { name: \"Ground\" }] }\n",
     )
     .unwrap();
     let map = jackdaw_tilemap::TilemapData::default();
