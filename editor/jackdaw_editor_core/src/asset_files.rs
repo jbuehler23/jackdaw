@@ -193,7 +193,7 @@ fn read_file_facts(path: &Path, opened: Option<&HashSet<String>>) -> FileFacts {
 /// cost a large scene's whole length.
 fn first_root_nothing_opens(text: &str, opened: Option<&HashSet<String>>) -> Option<String> {
     let opened = opened?;
-    if text.contains(PREFAB_TYPE) {
+    if jackdaw_bsn::names_prefab_marker(text) {
         return None;
     }
     match jackdaw_bsn::read_document_opening(text) {

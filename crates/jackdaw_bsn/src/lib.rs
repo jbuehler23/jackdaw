@@ -31,9 +31,9 @@ pub use catalog::{
 
 pub use header::{
     ASSET_HEADER, AssetFileError, DocumentOpening, PREFAB_TYPE, StemIndex, asset_file_type,
-    asset_stem, asset_text_type, document_type_path, path_stem, read_asset_file, read_asset_header,
-    read_asset_text, read_document_opening, root_type_path, walk_asset_files, walk_document_files,
-    walk_files_with_extensions, with_asset_header,
+    asset_stem, asset_text_type, document_type_path, names_prefab_marker, path_stem,
+    read_asset_file, read_asset_header, read_asset_text, read_document_opening, root_type_path,
+    walk_asset_files, walk_document_files, walk_files_with_extensions, with_asset_header,
 };
 
 pub use binary::{BinaryError, DecodedDocument, is_binary};

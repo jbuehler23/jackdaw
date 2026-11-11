@@ -2132,7 +2132,7 @@ fn load_asset_file(
     match jackdaw_bsn::read_document_opening(&text) {
         jackdaw_bsn::DocumentOpening::Hierarchy => return None,
         jackdaw_bsn::DocumentOpening::Value(type_path)
-            if !text.contains(jackdaw_bsn::PREFAB_TYPE)
+            if !jackdaw_bsn::names_prefab_marker(&text)
                 && !loads_as_asset(world, &type_path, header.is_some(), skipped) =>
         {
             return None;
@@ -2436,6 +2436,30 @@ mod asset_file_tests {
             tmp.path(),
             "lone.bsn",
             "bevy_transform::components::transform::Transform\n",
+        );
+
+        let before = jackdaw_bsn::parses_on_this_thread();
+        load_walked_assets(app.world_mut(), tmp.path(), None);
+        assert_eq!(jackdaw_bsn::parses_on_this_thread(), before);
+        assert!(app.world().resource::<JackdawCatalog>().is_empty());
+    }
+
+    /// A scene opening on an entity with no children, with prefab instances in it,
+    /// is told from an asset file without a parse.
+    #[test]
+    fn the_walk_does_not_parse_a_scene_of_prefab_instances() {
+        let mut app = runtime_app();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write(
+            tmp.path(),
+            "level.bsn",
+            "bevy_ecs::hierarchy::Children [\n\
+             #Sun\n\
+             bevy_transform::components::transform::Transform\n\
+             --\n\
+             jackdaw::prefab::components::IsA { source: \"prefabs/lamp.bsn\", deleted: [] }\n\
+             jackdaw::prefab::components::PrefabEntityId(0)\n\
+             ]\n",
         );
 
         let before = jackdaw_bsn::parses_on_this_thread();
