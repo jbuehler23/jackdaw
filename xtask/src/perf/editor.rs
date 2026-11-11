@@ -124,6 +124,14 @@ impl Editor {
             .collect()
     }
 
+    /// The executables of the games Play started.
+    pub fn game_executables(&self) -> Vec<PathBuf> {
+        system::descendants_running_from(self.pid, &self.project.join(".jackdaw/target"))
+            .into_iter()
+            .map(|(_, exe)| exe)
+            .collect()
+    }
+
     /// Ask the editor to quit as Ctrl-C would, which closes its games' links
     /// so they exit too, and kill it and anything it left running if it has
     /// not gone within [`EXIT_GRACE`].

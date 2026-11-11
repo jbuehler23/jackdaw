@@ -931,6 +931,7 @@ fn spawn_scene_document(
     }
 
     let members = spawn_scene_entities(world, root_entity, &ast, parent_path, &expanded);
+    info!("Spawned scene '{scene_name}'");
     world
         .entity_mut(root_entity)
         .insert(SceneInstanceMembers(members));
