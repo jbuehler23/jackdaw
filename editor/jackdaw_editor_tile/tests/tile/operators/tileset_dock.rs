@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use bevy::prelude::*;
-use bevy::ui_widgets::Activate;
+use bevy::ui_widgets::{Activate, Button};
 use jackdaw_api::prelude::*;
 use jackdaw_editor_core::asset_index::AssetIndex;
 use jackdaw_editor_tile::tileset_bits::MissingGlyph;
@@ -429,29 +429,31 @@ fn the_dock_opens_on_the_tiles_mode_with_a_mode_bar() {
 }
 
 #[test]
-fn a_peer_click_paints_the_brush_and_the_view_follows_undo() {
-    let (mut app, dir) = handmade();
-    count_builds(&mut app);
+fn a_picked_tile_shows_no_zone_editor_beside_the_sheet() {
+    let (mut app, _dir) = handmade();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Tile(0, 0));
     press(&mut app, root, DockAction::Brush(WATER));
-    let count = entries(&app);
-    let built = builds(&app);
-    press(&mut app, root, DockAction::Peer(1));
-
-    let peers = |dir: &tempfile::TempDir| {
-        (on_disk(dir).tiles.iter())
-            .find(|t| t.sheet == 0 && t.tile == 0)
-            .map(|t| t.peers)
-    };
-    assert_eq!(peers(&dir).map(|p| p[1]), Some(WATER));
-    assert_eq!(entries(&app), count + 1, "one undo entry");
-    assert_eq!(builds(&app) - built, 1, "the dock is built once");
-
-    run(&mut app, "history.undo");
-    settle(&mut app);
-    assert_eq!(peers(&dir).map(|p| p[1]), Some(GRASS));
-    assert_eq!(view(&app).selected, Some((0, 0)));
+    press(&mut app, root, DockAction::Tile(0, 0));
+    assert!(texts(&mut app, root).contains(&"Tile 0".to_string()));
+    for mode in [ModeId::TILES, ModeId::TERRAINS] {
+        press(&mut app, root, DockAction::Mode(mode));
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            let children: Vec<Entity> = (app.world().get::<Children>(entity))
+                .map(|c| c.to_vec())
+                .unwrap_or_default();
+            let buttons = (children.iter())
+                .filter(|c| app.world().get::<Button>(**c).is_some())
+                .count();
+            let grid =
+                (app.world().get::<Node>(entity)).is_some_and(|n| n.display == Display::Grid);
+            assert!(
+                !(grid && buttons == 9),
+                "{mode:?}: a 3x3 grid of zone buttons"
+            );
+            stack.extend(children);
+        }
+    }
 }
 
 /// An editor opened again on `dir`, once its tileset is indexed and loaded.

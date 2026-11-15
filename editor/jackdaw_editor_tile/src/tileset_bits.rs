@@ -1,15 +1,19 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
+use bevy::picking::hover::Hovered;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::tokens;
+use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_tilemap::{Coverage, MatchMode, Peer, TerrainId, TileAddress, TileTerrains};
 use jackdaw_tilemap::{SetupTile, TilesetSetup};
 use jackdaw_tileset::Tileset;
 
 use crate::sheet_stroke::{SheetPaint, StrokeInfo, StrokeStart};
-use crate::tileset_dock::{DockCall, DockView, PaintedCount, TilesetDockViews, swatch};
+use crate::tileset_dock::{
+    DockAction, DockCall, DockControl, DockView, PaintedCount, TilesetDockViews, swatch,
+};
 use crate::tileset_edit::{
     peer, queue_edit, terrain_or_empty, terrain_set, text, tile, with_setup,
 };
@@ -54,9 +58,11 @@ pub struct MissingShapes {
     writes_disk = true,
     label = "Paint Tile Bits",
     description = "Paint a terrain on zones of sheet tiles in one terrain set, as one undo \
-                   entry; zones its match mode does not use and tiles of objects are left. A \
-                   sheet outside terrain setup comes under it in the same entry. Nothing \
-                   changed adds no entry.",
+                   entry; zones its match mode does not read and tiles of objects are left. A \
+                   tile holding terrains of another set moves to this one, its old zones \
+                   cleared. Erasing clears only zones of the set's terrains. A sheet outside \
+                   terrain setup comes under it in the same entry. Nothing changed adds no \
+                   entry.",
     allows_undo = false,
     params(
         path(
@@ -228,6 +234,49 @@ pub(crate) fn terrain_overlay(world: &mut World, sheet: &ModeSheet) {
     if let Some(values) = terrain_zones(tileset, setup, sheet, view) {
         spawn_zone_overlay(world, frame, root, (tileset, sheet), values);
     }
+    warn_moves(world, frame, sheet, (tileset, setup), view);
+}
+
+/// A hover tooltip on each tile of sheet `sheet` that painting the brush
+/// moves from another terrain set to the brush's.
+fn warn_moves(
+    world: &mut World,
+    frame: Entity,
+    sheet: u32,
+    (tileset, setup): (&Tileset, &TilesetSetup),
+    view: &DockView,
+) {
+    let set = (view.brush != 0)
+        .then(|| view.paint_set(tileset))
+        .flatten()
+        .and_then(|s| setup.sets.get(s));
+    let (Some(set), Ok(on)) = (set, tileset.setup_sheet(sheet)) else {
+        return;
+    };
+    let foreign = |id: &TerrainId| *id != 0 && !set.terrains.contains(id);
+    let moved: HashSet<u32> = (setup.tiles.iter())
+        .filter(|(a, t)| a.sheet == on && t.terrains.peers.iter().any(foreign))
+        .filter(|(a, _)| setup.stamp_holding(**a).is_none())
+        .map(|(a, _)| a.tile)
+        .collect();
+    if moved.is_empty() {
+        return;
+    }
+    let tiles: Vec<Entity> = (world.get::<Children>(frame).into_iter().flatten())
+        .copied()
+        .filter(|e| {
+            world
+                .get::<DockControl>(*e)
+                .is_some_and(|c| match c.action {
+                    DockAction::Tile(s, t) => s == sheet && moved.contains(&t),
+                    _ => false,
+                })
+        })
+        .collect();
+    let tip = format!("Painting moves this tile to {}", set.name);
+    for tile in tiles {
+        (world.entity_mut(tile)).insert((Tooltip::title(tip.clone()), Hovered::default()));
+    }
 }
 
 /// Whether the overlay of set `active` shows `tile`: the set holds it, or
@@ -335,7 +384,8 @@ impl SheetPaint for BitPaint {
         let mut fresh = Vec::new();
         for point in points {
             let zone = stroke.tileset.zone_at(stroke.sheet, *point, self.mode);
-            if let Some(zone) = zone.filter(|z| self.zones.insert(*z)) {
+            let read = zone.filter(|(_, peer)| self.mode.reads(*peer));
+            if let Some(zone) = read.filter(|z| self.zones.insert(*z)) {
                 fresh.push(zone);
             }
         }

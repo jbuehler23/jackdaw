@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use jackdaw_editor_tile::tileset_collision::{PhysicsLayerPick, SOLID, TRIGGER};
 use jackdaw_editor_tile::tileset_dock::DockAction;
 use jackdaw_editor_tile::tileset_modes::ModeId;
-use jackdaw_editor_tile::zone_overlay::{ZoneOverlay, ZonePiece};
+use jackdaw_editor_tile::zone_overlay::{ZoneOverlay, ZonePiece, zone_pieces};
 use jackdaw_feathers::combobox::ComboBoxChangeEvent;
 use jackdaw_tileset::CollisionPreset;
 
@@ -55,7 +55,7 @@ fn pieces(app: &mut App, root: Entity) -> Vec<ZonePiece> {
         .collect();
     let world = app.world();
     (overlays.into_iter())
-        .flat_map(|o| world.get::<Children>(o).into_iter().flatten().copied())
+        .flat_map(|o| zone_pieces(world, o))
         .filter_map(|e| world.get::<ZonePiece>(e).copied())
         .collect()
 }
@@ -219,7 +219,7 @@ fn shape_colors(app: &mut App, root: Entity) -> Vec<Color> {
         .collect();
     let world = app.world();
     (overlays.into_iter())
-        .flat_map(|o| world.get::<Children>(o).into_iter().flatten().copied())
+        .flat_map(|o| zone_pieces(world, o))
         .filter(|e| matches!(world.get::<ZonePiece>(*e), Some(ZonePiece::Shape { .. })))
         .filter_map(|e| world.get::<BorderColor>(e).map(|b| b.top.with_alpha(1.0)))
         .collect()

@@ -209,6 +209,27 @@ pub enum ZonePiece {
     },
 }
 
+/// A node over a run of side-by-side tiles holding values in one row, which
+/// clips the pieces drawn on them so a glow stays on the run.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZoneClip;
+
+/// The drawn parts of `overlay`, those inside its clips included.
+pub fn zone_pieces(world: &World, overlay: Entity) -> Vec<Entity> {
+    let children = |e: Entity| world.get::<Children>(e).into_iter().flatten().copied();
+    (children(overlay))
+        .flat_map(|e| {
+            let inside: Vec<Entity> = if world.get::<ZoneClip>(e).is_some() {
+                children(e).collect()
+            } else {
+                vec![e]
+            };
+            inside
+        })
+        .filter(|e| world.get::<ZonePiece>(*e).is_some())
+        .collect()
+}
+
 /// The outline of the zone under the pointer, showing tile `tile`.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ZoneHover {
@@ -242,7 +263,7 @@ pub fn spawn_zone_overlay(
     spawn_pieces(
         world,
         overlay,
-        &values,
+        (&grid, &values),
         pieces(&grid, &values, 0..grid.rows),
     );
     let hover = values.hover.map(|fill| {
@@ -310,7 +331,7 @@ pub fn redraw_zone_rows(
         spawn_pieces(
             world,
             overlay,
-            &values,
+            (&grid, &values),
             pieces(&grid, &values, row..row + 1),
         );
     }
@@ -319,12 +340,35 @@ pub fn redraw_zone_rows(
     }
 }
 
+/// Spawn `found` in `overlay`: dim pieces on it, the others in a clip over
+/// the run of held tiles they sit on.
 fn spawn_pieces(
     world: &mut World,
     overlay: Entity,
-    values: &ZoneValues,
+    (grid, values): (&SheetGrid, &ZoneValues),
     found: Vec<(u32, ZonePiece, Rect)>,
 ) {
+    let rows: HashSet<u32> = (found.iter())
+        .filter(|(_, piece, _)| *piece != ZonePiece::Dim)
+        .map(|(row, ..)| *row)
+        .collect();
+    let mut clips: Vec<(u32, Rect, Entity)> = Vec::new();
+    for row in rows {
+        for run in held_runs(grid, values, row) {
+            let mut node = absolute(run);
+            node.overflow = Overflow::clip();
+            let clip = world
+                .spawn((
+                    node,
+                    ZoneClip,
+                    ZoneRow(row),
+                    Pickable::IGNORE,
+                    ChildOf(overlay),
+                ))
+                .id();
+            clips.push((row, run, clip));
+        }
+    }
     let dark = Color::BLACK.with_alpha(0.7);
     let glow =
         |line: Color| BoxShadow::new(line.with_alpha(GLOW_ALPHA), px(0), px(0), px(0), px(GLOW));
@@ -333,12 +377,22 @@ fn spawn_pieces(
         color(values, value).with_alpha(alpha)
     };
     for (row, piece, rect) in found {
+        let clip = (piece != ZonePiece::Dim)
+            .then(|| (clips.iter()).find(|(r, run, _)| *r == row && run.contains(rect.center())))
+            .flatten();
+        let (parent, rect) = match clip {
+            Some((_, run, clip)) => (
+                *clip,
+                Rect::from_corners(rect.min - run.min, rect.max - run.min),
+            ),
+            None => (overlay, rect),
+        };
         let mut node = world.spawn((
             absolute(rect),
             piece,
             ZoneRow(row),
             Pickable::IGNORE,
-            ChildOf(overlay),
+            ChildOf(parent),
         ));
         match piece {
             ZonePiece::Dim => {
@@ -431,23 +485,8 @@ pub fn pieces(
     let mut out = Vec::new();
     for row in rows.start..rows.end.min(grid.rows) {
         if values.dim {
-            let mut open: Option<Rect> = None;
-            for column in 0..grid.columns {
-                let tile = row * grid.columns + column;
-                let held = values.outlines.contains_key(&tile)
-                    || (values.tiles.get(&tile)).is_some_and(|p| p.iter().any(|v| *v != 0));
-                let at = grid.tiles.get(tile as usize).copied().unwrap_or_default();
-                match (held, open.as_mut()) {
-                    (false, Some(run)) if (run.max.x - at.min.x).abs() < 0.01 => {
-                        *run = run.union(at);
-                    }
-                    (false, _) => {
-                        out.extend(open.replace(at).map(|r| (row, ZonePiece::Dim, r)));
-                    }
-                    (true, _) => out.extend(open.take().map(|r| (row, ZonePiece::Dim, r))),
-                }
-            }
-            out.extend(open.map(|r| (row, ZonePiece::Dim, r)));
+            let dims = runs(grid, row, |tile| !holds(values, tile));
+            out.extend(dims.into_iter().map(|r| (row, ZonePiece::Dim, r)));
         }
         let mut shapes = Vec::new();
         for column in 0..grid.columns {
@@ -468,6 +507,38 @@ pub fn pieces(
         out.extend(shapes.into_iter().map(|(piece, at)| (row, piece, at)));
     }
     out
+}
+
+/// Whether tile `tile` holds a value.
+fn holds(values: &ZoneValues, tile: u32) -> bool {
+    values.outlines.contains_key(&tile)
+        || (values.tiles.get(&tile)).is_some_and(|p| p.iter().any(|v| *v != 0))
+}
+
+/// The runs of side-by-side tiles in tile row `row` that `take` takes.
+fn runs(grid: &SheetGrid, row: u32, take: impl Fn(u32) -> bool) -> Vec<Rect> {
+    let mut out = Vec::new();
+    let mut open: Option<Rect> = None;
+    for column in 0..grid.columns {
+        let tile = row * grid.columns + column;
+        let at = grid.tiles.get(tile as usize).copied().unwrap_or_default();
+        if !take(tile) {
+            out.extend(open.take());
+            continue;
+        }
+        match open.as_mut() {
+            Some(run) if (run.max.x - at.min.x).abs() < 0.01 => *run = run.union(at),
+            _ => out.extend(open.replace(at)),
+        }
+    }
+    out.extend(open);
+    out
+}
+
+/// The runs of side-by-side tiles holding a value in tile row `row`, each
+/// clipping what is drawn on it.
+pub fn held_runs(grid: &SheetGrid, values: &ZoneValues, row: u32) -> Vec<Rect> {
+    runs(grid, row, |tile| holds(values, tile))
 }
 
 /// The shape of each value on tile `tile`, inset from the tile's edges.
@@ -822,6 +893,23 @@ mod tests {
         assert!(shapes.contains(&(other, right)), "{shapes:?}");
         assert_eq!(count(&found, |p| *p == ZonePiece::Dim), 1, "the empty tile");
         assert_eq!(found.len(), 4, "no edge or fill pieces");
+    }
+
+    #[test]
+    fn a_glowing_shape_sits_in_a_clip_over_its_held_tiles_and_off_the_dimmed_ones() {
+        let values = corners(&[(1, [1, 1, 1, 0]), (2, [1, 1, 1, 1])], Some(1));
+        let grid = grid(4, 1);
+        let runs = held_runs(&grid, &values, 0);
+        assert_eq!(runs, [Rect::new(32.0, 0.0, 96.0, 32.0)], "tiles 1 and 2");
+        let found = drawn(&grid, &values);
+        for (piece, at) in &found {
+            if *piece == ZonePiece::Dim {
+                let overlap = at.intersect(runs[0]);
+                assert!(overlap.is_empty() || overlap.size().min_element() < 0.01);
+            } else {
+                assert!(runs[0].contains(at.center()), "{piece:?} at {at:?}");
+            }
+        }
     }
 
     #[test]

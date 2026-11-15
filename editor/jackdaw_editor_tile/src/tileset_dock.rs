@@ -52,7 +52,7 @@ pub const TILESET_WINDOW_ID: &str = "jackdaw.tileset";
 
 /// On-screen size a sheet tile is drawn at, at the least.
 const READABLE_TILE: f32 = 32.0;
-/// On-screen size of the selected tile's preview.
+/// On-screen size of the picked tile's image.
 const PREVIEW: f32 = 72.0;
 /// Width of the terrains and sets column beside the sheet.
 const LIST_WIDTH: f32 = 248.0;
@@ -248,7 +248,6 @@ pub enum DockAction {
     Mode(ModeId),
     Tile(u32, u32),
     Brush(TerrainId),
-    Peer(usize),
     AddObject,
     RemoveObject(u32, UVec2),
     /// Add a terrain to the active set and name it.
@@ -971,8 +970,8 @@ fn spawn_detail(
     view: &DockView,
     active: Option<(usize, Coverage)>,
 ) {
-    if let Some((sheet, tile)) = view.selected {
-        spawn_tile_editor(world, parent, root, (tileset, setup), view, (sheet, tile));
+    if let Some(selected) = view.selected {
+        spawn_picked_tile(world, parent, tileset, selected);
     }
     if view.naming == Some(NameField::New) {
         let row = spawn_row(world, parent, tokens::SPACING_SM);
@@ -1342,77 +1341,31 @@ pub(crate) fn rect_cells(columns: u32, a: (u32, u32), b: (u32, u32)) -> (UVec2, 
     (a.min(b), a.max(b))
 }
 
-/// The picked tile with a button over each zone that paints the brush
-/// terrain on it.
-fn spawn_tile_editor(
+/// The picked tile's image and name.
+fn spawn_picked_tile(
     world: &mut World,
     parent: Entity,
-    root: Entity,
-    (tileset, setup): (&Tileset, &TilesetSetup),
-    view: &DockView,
+    tileset: &Tileset,
     (sheet, tile): (u32, u32),
 ) {
     let row = spawn_row(world, parent, tokens::SPACING_MD);
-    let peers = (tileset.setup_address(sheet, tile).ok())
-        .and_then(|a| setup.tiles.get(&a))
-        .map(|t| t.terrains.peers)
-        .unwrap_or_default();
     let preview = tile_image(world, tileset, sheet, tile).unwrap_or_default();
-    let grid = world
-        .spawn((
-            Node {
-                width: px(PREVIEW),
-                height: px(PREVIEW),
-                display: Display::Grid,
-                grid_template_columns: RepeatedGridTrack::flex(3, 1.0),
-                grid_template_rows: RepeatedGridTrack::flex(3, 1.0),
-                flex_shrink: 0.0,
-                ..default()
-            },
-            preview,
-            ChildOf(row),
-        ))
-        .id();
-    for (peer, terrain) in peers.iter().enumerate() {
-        world.spawn((
-            Node {
-                border: UiRect::all(px(1.0)),
-                ..default()
-            },
-            BackgroundColor(swatch(tileset, *terrain, 0.45)),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            Button,
-            DockControl {
-                root,
-                action: DockAction::Peer(peer),
-            },
-            ChildOf(grid),
-        ));
-    }
-    let text = world
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                flex_shrink: 1.0,
-                min_width: px(0.0),
-                row_gap: px(tokens::SPACING_XS),
-                ..default()
-            },
-            ChildOf(row),
-        ))
-        .id();
+    world.spawn((
+        Node {
+            width: px(PREVIEW),
+            height: px(PREVIEW),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        preview,
+        ChildOf(row),
+    ));
     let name = if tileset.sheets.len() > 1 {
         format!("Sheet {}, tile {tile}", sheet + 1)
     } else {
         format!("Tile {tile}")
     };
-    spawn_text(world, text, name, tokens::TEXT_PRIMARY);
-    let brush = (tileset.terrains.iter()).find(|t| t.id == view.brush);
-    let hint = match brush {
-        Some(brush) => format!("Click a zone to paint {}, again to clear it", brush.name),
-        None => "Click a zone to clear it".to_string(),
-    };
-    spawn_text(world, text, hint, tokens::TEXT_SECONDARY);
+    spawn_text(world, row, name, tokens::TEXT_PRIMARY);
 }
 
 fn spawn_object_pick(
@@ -1855,22 +1808,6 @@ fn act(world: &mut World, control: DockControl) {
             view.selected = Some((sheet, tile));
             None
         }
-        DockAction::Peer(peer) => view.selected.map(|(sheet, tile)| {
-            let held = (tileset.tiles.iter())
-                .find(|t| t.sheet == sheet && t.tile == tile)
-                .and_then(|t| t.peers.get(peer).copied());
-            let terrain = if held == Some(view.brush) {
-                0
-            } else {
-                view.brush
-            };
-            let params = vec![
-                ("tile", format!("{sheet}:{tile}")),
-                ("peer", peer.to_string()),
-                ("terrain", terrain.to_string()),
-            ];
-            ("tileset.tile.set_bits", params)
-        }),
         DockAction::AddObject => {
             object_rect(&tileset, &view).map(|params| ("tileset.object.add", params))
         }

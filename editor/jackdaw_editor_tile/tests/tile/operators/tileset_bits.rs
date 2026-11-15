@@ -11,13 +11,15 @@ use crate::util::OperatorResultExt as _;
 
 use std::collections::BTreeSet;
 
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_editor_tile::tileset_dock::{DockAction, SetModePick};
 use jackdaw_editor_tile::tileset_layout::GhostZones;
 use jackdaw_editor_tile::tileset_modes::ModeId;
-use jackdaw_editor_tile::zone_overlay::{ZoneHover, ZoneOverlay, ZonePiece};
+use jackdaw_editor_tile::zone_overlay::{ZoneClip, ZoneHover, ZoneOverlay, ZonePiece, zone_pieces};
 use jackdaw_feathers::combobox::ComboBoxChangeEvent;
+use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_tileset::TerrainMatch;
 
 const GRASS: u8 = 1;
@@ -67,13 +69,7 @@ fn pieces(app: &mut App, root: Entity) -> Vec<ZonePiece> {
         .map(|(e, _)| e)
         .collect();
     (overlays.into_iter())
-        .flat_map(|o| {
-            app.world()
-                .get::<Children>(o)
-                .into_iter()
-                .flatten()
-                .copied()
-        })
+        .flat_map(|o| zone_pieces(app.world(), o))
         .filter_map(|e| app.world().get::<ZonePiece>(e).copied())
         .collect()
 }
@@ -90,7 +86,7 @@ fn piece_nodes(app: &mut App, root: Entity) -> Vec<(ZonePiece, Option<Color>)> {
         .collect();
     let world = app.world();
     (overlays.into_iter())
-        .flat_map(|o| world.get::<Children>(o).into_iter().flatten().copied())
+        .flat_map(|o| zone_pieces(world, o))
         .filter_map(|e| {
             let piece = world.get::<ZonePiece>(e).copied()?;
             Some((piece, world.get::<BackgroundColor>(e).map(|c| c.0)))
@@ -814,4 +810,204 @@ fn a_bit_set_on_a_sheet_outside_setup_brings_it_under_setup() {
     assert_eq!(peers_of(&after, 4).map(|p| p[0]), Some(1));
     run(&mut app, "history.undo");
     assert_eq!(on_disk(&dir), before);
+}
+
+/// Whether a dim piece of the overlay of the dock under `root` covers the
+/// middle of tile `tile`.
+fn dimmed(app: &mut App, root: Entity, tile: u32) -> bool {
+    let middle = on_tile(app, root, tile, Vec2::splat(0.5));
+    let overlays: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<(Entity, &ZoneOverlay), Without<GhostZones>>()
+        .iter(app.world())
+        .filter(|(_, o)| o.root == root)
+        .map(|(e, _)| e)
+        .collect();
+    (overlays.into_iter())
+        .flat_map(|o| zone_pieces(app.world(), o))
+        .filter(|e| app.world().get::<ZonePiece>(*e) == Some(&ZonePiece::Dim))
+        .any(|e| screen_rect(app, e).contains(middle))
+}
+
+fn marked(app: &mut App, root: Entity, tile: u32) -> BTreeSet<usize> {
+    (marks(app, root).into_iter())
+        .filter(|(t, _)| *t == tile)
+        .map(|(_, peer)| peer)
+        .collect()
+}
+
+#[test]
+fn painting_a_dimmed_tile_undims_it_and_records_its_zones_in_one_undo_entry() {
+    let (mut app, dir) = handmade();
+    let root = painting(&mut app);
+    press(&mut app, root, DockAction::Brush(WATER));
+    assert!(
+        dimmed(&mut app, root, 5),
+        "a tile with no terrain is dimmed"
+    );
+    let (before, count) = (on_disk(&dir), entries(&app));
+    let corner = on_tile(&mut app, root, 5, Vec2::new(0.15, 0.15));
+    pointer(&mut app, corner, "click", "primary");
+    assert_eq!(
+        peers_of(&on_disk(&dir), 5),
+        Some([WATER, 0, 0, 0, 0, 0, 0, 0, 0])
+    );
+    assert_eq!(
+        entries(&app),
+        count + 1,
+        "joining and painting are one entry"
+    );
+    assert!(!dimmed(&mut app, root, 5), "it joined the set");
+    assert_eq!(marked(&mut app, root, 5), BTreeSet::from([0]));
+
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir), before);
+    assert!(dimmed(&mut app, root, 5), "undo takes it out again");
+
+    run(&mut app, "history.redo");
+    settle(&mut app);
+    assert!(!dimmed(&mut app, root, 5));
+    pointer(&mut app, corner, "click", "secondary");
+    let erased = on_disk(&dir);
+    let tile = (erased.tiles.iter()).find(|t| t.sheet == 0 && t.tile == 5);
+    assert!(tile.is_none_or(|t| t.peers == [0; 9] && t.set_inner == 0));
+    assert!(
+        dimmed(&mut app, root, 5),
+        "erasing its last zone takes it out"
+    );
+    assert!(marked(&mut app, root, 5).is_empty());
+}
+
+/// Click at each of `points` of tile `tile`; says whether the zone under
+/// each was outlined before its click.
+fn clicks(app: &mut App, root: Entity, tile: u32, points: &[Vec2]) -> Vec<bool> {
+    let mut outlined = Vec::new();
+    for at in points {
+        let at = on_tile(app, root, tile, *at);
+        input(
+            app,
+            &format!("input.pointer x={} y={} action=move", at.x, at.y),
+        );
+        let shown = app
+            .world_mut()
+            .query::<(&ZoneHover, &Node)>()
+            .iter(app.world())
+            .any(|(h, n)| h.tile == Some(tile) && n.display != Display::None);
+        outlined.push(shown);
+        pointer(app, at, "click", "primary");
+    }
+    outlined
+}
+
+#[test]
+fn corner_side_and_mixed_sets_show_and_paint_only_their_own_zones() {
+    let corner = Vec2::new(0.2, 0.1);
+    let side = Vec2::new(0.15, 0.5);
+    let middle = Vec2::splat(0.5);
+    let cases: [(&str, [bool; 3], &[usize]); 3] = [
+        ("corners", [true, true, false], &[0, 6]),
+        ("sides", [true, true, true], &[1, 3, 4]),
+        ("corners_and_sides", [true, true, true], &[0, 3, 4]),
+    ];
+    for (mode, outlined, expected) in cases {
+        let (mut app, dir) = handmade();
+        call(
+            &mut app,
+            "tileset.terrain_set.set",
+            &[("set", "0"), ("mode", mode)],
+        );
+        settle(&mut app);
+        let root = painting(&mut app);
+        press(&mut app, root, DockAction::Brush(WATER));
+        let shown = clicks(&mut app, root, 5, &[corner, side, middle]);
+        assert_eq!(shown, outlined, "{mode}: the zones outlined");
+        let peers = peers_of(&on_disk(&dir), 5).expect("painted");
+        let painted: BTreeSet<usize> = (0..9).filter(|p| peers[*p] == WATER).collect();
+        let want: BTreeSet<usize> = expected.iter().copied().collect();
+        assert_eq!(painted, want, "{mode}: {peers:?}");
+        assert_eq!(marked(&mut app, root, 5), want, "{mode}: the overlay");
+    }
+}
+
+#[test]
+fn moving_a_tile_between_sets_warns_on_hover_and_undoes_cleanly() {
+    let (mut app, dir) = handmade();
+    let shore = [("name", "Shore"), ("mode", "corners")];
+    call(&mut app, "tileset.terrain_set.add", &shore);
+    let sand = [("name", "sand"), ("set", "Shore")];
+    call(&mut app, "tileset.terrain.add", &sand);
+    settle(&mut app);
+    let root = painting(&mut app);
+    let tip = |app: &mut App, tile: u32| {
+        let cell = control(app, root, DockAction::Tile(0, tile));
+        (app.world().get::<Tooltip>(cell)).map(|t| t.title.clone())
+    };
+    press(&mut app, root, DockAction::Brush(WATER));
+    assert_eq!(tip(&mut app, 0), None, "tile 0 is in water's set");
+    press(&mut app, root, DockAction::Brush(SAND));
+    assert_eq!(
+        tip(&mut app, 0).as_deref(),
+        Some("Painting moves this tile to Shore")
+    );
+    assert_eq!(tip(&mut app, 5), None, "an empty tile just joins");
+    let cell = control(&mut app, root, DockAction::Tile(0, 0));
+    assert!(
+        app.world().get::<Hovered>(cell).is_some(),
+        "it shows on hover"
+    );
+
+    let (before, count) = (on_disk(&dir), entries(&app));
+    let corner = on_tile(&mut app, root, 0, Vec2::new(0.15, 0.15));
+    pointer(&mut app, corner, "click", "primary");
+    assert_eq!(
+        peers_of(&on_disk(&dir), 0),
+        Some([SAND, 0, 0, 0, 0, 0, 0, 0, 0]),
+        "its old zones are cleared"
+    );
+    assert_eq!(entries(&app), count + 1, "one undo entry");
+    assert_eq!(marked(&mut app, root, 0), BTreeSet::from([0]));
+    assert_eq!(tip(&mut app, 0), None, "it is in Shore now");
+
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir), before, "undo restores the old set");
+    assert_eq!(
+        peers_of(&on_disk(&dir), 0),
+        Some([
+            GRASS, GRASS, GRASS, GRASS, GRASS, GRASS, GRASS, GRASS, WATER
+        ])
+    );
+}
+
+#[test]
+fn the_glow_stays_on_its_tiles_and_off_dimmed_neighbors() {
+    let (mut app, _dir) = handmade();
+    let root = painting(&mut app);
+    press(&mut app, root, DockAction::Brush(GRASS));
+    let glowing: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, (With<BoxShadow>, With<ZonePiece>)>()
+        .iter(app.world())
+        .collect();
+    assert!(!glowing.is_empty(), "the grass L glows");
+    let cell = control(&mut app, root, DockAction::Tile(0, 0));
+    let tile = screen_rect(&app, cell);
+    for piece in glowing {
+        let clip = app
+            .world()
+            .get::<ChildOf>(piece)
+            .expect("parented")
+            .parent();
+        assert!(app.world().get::<ZoneClip>(clip).is_some(), "clipped");
+        let node = app.world().get::<Node>(clip).expect("a node");
+        assert_eq!(node.overflow, Overflow::clip());
+        let at = screen_rect(&app, clip);
+        assert!(
+            (at.min - tile.min).abs().max_element() < 0.5
+                && (at.max - tile.max).abs().max_element() < 0.5,
+            "the clip is the painted tile: {at:?} against {tile:?}"
+        );
+    }
+    assert!(dimmed(&mut app, root, 1), "the neighbor is dimmed");
 }

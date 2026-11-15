@@ -334,23 +334,46 @@ impl TilesetSetup {
     }
 
     /// Paints `terrain` by hand on each zone of `zones` the mode of the set at
-    /// `set` matches on, skipping the rest and the tiles of objects. Returns
-    /// how many zones changed.
+    /// `set` reads, skipping the rest and the tiles of objects. A tile holding
+    /// terrains of other sets moves to this one: those peers are cleared. An
+    /// erase clears only zones holding one of the set's terrains, and a tile
+    /// left with none leaves the set's transition it was laid out for.
+    /// Returns how many peers changed.
     pub fn paint_zones(
         &mut self,
         set: usize,
         terrain: TerrainId,
         zones: &[(TileAddress, Peer)],
     ) -> Result<usize, SetupError> {
-        let mode = self.set_mut(set)?.mode.value;
+        let found = self.set_mut(set)?;
+        let (mode, members) = (found.mode.value, found.terrains.clone());
+        let ours = |id: TerrainId| id != 0 && members.contains(&id);
         let mut changed = 0;
         for &(tile, peer) in zones {
-            let now = self.tiles.get(&tile).map_or(0, |t| t.terrains.get(peer));
-            if !mode.uses(peer) || now == terrain || self.stamp_holding(tile).is_some() {
+            if !mode.reads(peer) || self.stamp_holding(tile).is_some() {
+                continue;
+            }
+            let held = (self.tiles.get(&tile)).map_or_else(TileTerrains::default, |t| t.terrains);
+            if terrain != 0 {
+                for other in Peer::ALL {
+                    let id = held.get(other);
+                    if other != peer && id != 0 && !ours(id) {
+                        self.set_peer_by_hand(tile, other, 0)?;
+                        changed += 1;
+                    }
+                }
+            }
+            let now = held.get(peer);
+            if now == terrain || (terrain == 0 && !ours(now)) {
                 continue;
             }
             self.set_peer_by_hand(tile, peer, terrain)?;
             changed += 1;
+            if let Some(entry) = self.tiles.get_mut(&tile)
+                && !entry.terrains.peers.iter().any(|id| ours(*id))
+            {
+                entry.set = entry.set.filter(|(a, b)| !ours(*a) && !ours(*b));
+            }
         }
         Ok(changed)
     }
@@ -763,6 +786,37 @@ mod tests {
         let object = [(at(5), Peer::Top)];
         assert_eq!(setup.paint_zones(0, SAND, &object), Ok(0));
         assert!(!setup.tiles.contains_key(&at(5)), "an object tile is left");
+    }
+
+    #[test]
+    fn painting_a_tile_of_another_set_moves_it_and_erasing_its_last_zone_takes_it_out() {
+        let mut setup = farm();
+        let (water, _) = water_and_shore(&mut setup);
+        let pond = pair_set(&mut setup, water, 0, MatchMode::Corners);
+        setup.tiles.get_mut(&at(1)).expect("tile").set = Some((SAND, GRASS));
+        let corner = [(at(1), Peer::TopLeft)];
+        assert_eq!(setup.paint_zones(pond, water, &corner), Ok(9));
+        let moved = &setup.tiles[&at(1)];
+        assert_eq!(
+            moved.terrains,
+            TileTerrains::default().with(Peer::TopLeft, water)
+        );
+        assert_eq!(moved.set, None, "it left the transition of the old set");
+        assert!(setup.holds(pond, moved) && !setup.holds(0, moved));
+
+        assert_eq!(
+            setup.paint_zones(0, 0, &[(at(1), Peer::Top)]),
+            Ok(0),
+            "an erase in another set leaves the tile"
+        );
+        let centre = [(at(1), Peer::Centre)];
+        assert_eq!(setup.paint_zones(pond, water, &centre), Ok(0), "unread");
+        setup.tiles.get_mut(&at(1)).expect("tile").set = Some((water, 0));
+        assert_eq!(setup.paint_zones(pond, 0, &corner), Ok(1));
+        let erased = &setup.tiles[&at(1)];
+        assert_eq!(erased.terrains, TileTerrains::default());
+        assert_eq!(erased.set, None);
+        assert!(!setup.holds(pond, erased));
     }
 
     #[test]
