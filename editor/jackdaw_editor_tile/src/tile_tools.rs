@@ -81,11 +81,29 @@ pub const MAX_FILL_CELLS: usize = 1 << 20;
 /// How a terrain stroke joins the terrain around it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StrokeMode {
-    /// Joins every neighbour of the same terrain.
+    /// Joins every neighbor of the same terrain.
     #[default]
     Connect,
     /// Joins only the cells of the same stroke.
     Path,
+}
+
+impl StrokeMode {
+    /// The mode named `name`, connect or path.
+    pub fn from_name(name: &str) -> Result<Self, String> {
+        match name {
+            "connect" => Ok(Self::Connect),
+            "path" => Ok(Self::Path),
+            other => Err(format!("mode is connect or path, not `{other}`")),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Path => "path",
+        }
+    }
 }
 
 /// What the brush paints with.
@@ -373,7 +391,7 @@ fn leave_when_unselected(world: &mut World) {
         tile(String, doc = "Tile as sheet:tile or packed layer the Brush places on tile layers."),
         mode(
             String,
-            doc = "connect joins every neighbour of the terrain; path joins only the cells of \
+            doc = "connect joins every neighbor of the terrain; path joins only the cells of \
                    the same stroke. Unset keeps the brush mode, connect at first."
         ),
     )
@@ -493,9 +511,7 @@ pub(crate) fn read_brush(
     let (terrain, tile) = (text("terrain"), text("tile"));
     brush.mode = match text("mode").as_str() {
         "" => brush.mode,
-        "connect" => StrokeMode::Connect,
-        "path" => StrokeMode::Path,
-        other => return Err(format!("mode is connect or path, not `{other}`")),
+        name => StrokeMode::from_name(name)?,
     };
     if !terrain.is_empty() || !tile.is_empty() {
         let (tileset, terrain_layer) = layer.ok_or("no tilemap is in tile edit mode")?;
@@ -793,7 +809,7 @@ pub(crate) fn paint_shape(
     cancel = cancel_tile_stroke,
     params(mode(
         String,
-        doc = "connect joins every neighbour of the terrain; path joins only the cells of the \
+        doc = "connect joins every neighbor of the terrain; path joins only the cells of the \
                same stroke. Unset keeps the brush mode, connect at first."
     ))
 )]
@@ -816,7 +832,7 @@ pub(crate) fn tilemap_rectangle(
     cancel = cancel_tile_stroke,
     params(mode(
         String,
-        doc = "connect joins every neighbour of the terrain; path joins only the cells of the \
+        doc = "connect joins every neighbor of the terrain; path joins only the cells of the \
                same stroke. Unset keeps the brush mode, connect at first."
     ))
 )]

@@ -1,6 +1,7 @@
 //! The Tile Palette window and the brush it loads: terrains and tiles of the
-//! active layer's tileset, picked through operators, flipped and rotated, and
-//! the Bucket's Contiguous toggle.
+//! active layer's tileset, picked through operators, flipped and rotated, the
+//! Terrains tab with its stroke mode and patterns, and the Bucket's
+//! Contiguous toggle.
 
 use crate::stage::tile_tools::{click, enter, entries, run, stored, stroke};
 use crate::stage::tilemap_render::{
@@ -10,20 +11,27 @@ use crate::stage::tilemap_render::{
 use bevy::feathers::controls::ButtonVariant;
 use bevy::prelude::*;
 use bevy::ui::{Checked, ComputedNode, InteractionDisabled, UiGlobalTransform};
-use bevy::ui_widgets::Activate;
+use bevy::ui_widgets::{Activate, ValueChange};
 use jackdaw_api::prelude::*;
 use jackdaw_editor_core::selection::Selection;
 use jackdaw_editor_tile::tile_palette::{
     ContiguousToggle, MIN_TILE_PX, PaletteBody, PaletteCell, PaletteHeader, PaletteItem,
-    PaletteSection, PaletteSelected, TILE_PALETTE_WINDOW_ID, TilePalette,
+    PaletteSection, PaletteSelected, StrokeModeSegment, TILE_PALETTE_WINDOW_ID, TerrainPatterns,
+    TilePalette, full_tiles,
 };
-use jackdaw_editor_tile::tile_tools::{BrushSource, TileBrush, TileEditMode, TileTool};
+use jackdaw_editor_tile::tile_tools::{
+    BrushSource, StrokeMode, TileBrush, TileEditMode, TileTool,
+};
 use jackdaw_feathers::button::ButtonOperatorCall;
+use jackdaw_feathers::tab_strip::TabStripTab;
+use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_scene_types::{PropertyValue, TilemapLayerKind};
-use jackdaw_tilemap::{CellCoord, TileRef};
+use jackdaw_tilemap::{CellCoord, TerrainId, TileRef};
 use jackdaw_tileset::{TerrainMatch, Tileset};
 
 const PICK: &str = "tilemap.palette.pick";
+const TAB: &str = "tilemap.palette.tab";
+const STROKE_MODE: &str = "tilemap.brush.stroke_mode";
 
 pub(crate) fn call(
     app: &mut App,
@@ -325,15 +333,10 @@ fn the_palette_shows_the_active_layers_terrains_and_tiles() {
     assert_eq!(sections(&mut app), vec![PaletteSection::Empty]);
 
     enter(&mut app, map);
-    let mut shown = sections(&mut app);
-    shown.sort();
     assert_eq!(
-        shown,
-        vec![
-            PaletteSection::Terrains,
-            PaletteSection::Tiles,
-            PaletteSection::Stamps
-        ]
+        sections(&mut app),
+        vec![PaletteSection::Terrains],
+        "a terrain layer opens on its Terrains tab"
     );
     let set = tileset(&app);
     let all = cells(&mut app);
@@ -341,13 +344,7 @@ fn the_palette_shows_the_active_layers_terrains_and_tiles() {
         .iter()
         .filter(|(_, i)| matches!(i, PaletteItem::Terrain(_)))
         .count();
-    let tiles = all
-        .iter()
-        .filter(|(_, i)| matches!(i, PaletteItem::Tile(..)))
-        .count();
-    let sheet_tiles: u32 = set.sheets.iter().map(|s| s.columns * s.rows).sum();
     assert_eq!(terrains, set.terrains.len());
-    assert_eq!(tiles, sheet_tiles as usize);
     assert_eq!(selected(&mut app), vec![PaletteItem::Terrain(1)]);
 
     let (water, _) = *all
@@ -359,6 +356,16 @@ fn the_palette_shows_the_active_layers_terrains_and_tiles() {
     assert_eq!(brush(&app).terrain, 2, "a click picks through the operator");
     assert_eq!(selected(&mut app), vec![PaletteItem::Terrain(2)]);
 
+    click_tab(&mut app, "tiles");
+    let mut shown = sections(&mut app);
+    shown.sort();
+    assert_eq!(shown, vec![PaletteSection::Tiles, PaletteSection::Stamps]);
+    let tiles = cells(&mut app)
+        .iter()
+        .filter(|(_, i)| matches!(i, PaletteItem::Tile(..)))
+        .count();
+    let sheet_tiles: u32 = set.sheets.iter().map(|s| s.columns * s.rows).sum();
+    assert_eq!(tiles, sheet_tiles as usize);
     let (four, _) = *cells(&mut app)
         .iter()
         .find(|(_, i)| *i == PaletteItem::Tile(0, 4))
@@ -386,6 +393,7 @@ fn a_pick_keeps_the_cells_and_the_scroll() {
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     open_palette(&mut app);
     enter(&mut app, map);
+    ok(&mut app, TAB, &[("tab", text("tiles"))]);
     let before = cells(&mut app);
     let scrolled = body(&mut app);
     app.world_mut()
@@ -457,7 +465,7 @@ fn a_layer_naming_no_tileset_says_why() {
 }
 
 #[test]
-fn a_corner_set_terrain_shows_its_corner_tile() {
+fn a_corner_set_terrain_lists_its_corner_tiles() {
     let (mut app, _dir) = project_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     open_palette(&mut app);
@@ -479,19 +487,17 @@ fn a_corner_set_terrain_shows_its_corner_tile() {
         !corner_only.is_empty(),
         "the fixture has a corners-only terrain"
     );
-    let drawn: Vec<u8> = app
-        .world_mut()
-        .query::<(&PaletteCell, &Children)>()
-        .iter(app.world())
-        .filter_map(|(cell, children)| match cell.item {
-            PaletteItem::Terrain(id) if !children.is_empty() => Some(id),
-            _ => None,
-        })
-        .collect();
     for id in corner_only {
+        ok(&mut app, PICK, &[("terrain", text(&id.to_string()))]);
+        let shown = patterns(&mut app);
         assert!(
-            drawn.contains(&id),
-            "terrain {id} shows a tile, not a colour"
+            shown.iter().any(|(_, (sheet, tile))| {
+                (set.tiles.iter()).any(|t| {
+                    (t.sheet, t.tile) == (*sheet, *tile)
+                        && [0, 2, 6, 8].iter().all(|&p| t.peers[p] == id)
+                })
+            }),
+            "terrain {id} lists a tile of its corners"
         );
     }
 }
@@ -599,7 +605,7 @@ fn brush_params_naming_both_follow_the_layer() {
 }
 
 #[test]
-fn a_terrain_with_an_icon_shows_that_tile() {
+fn a_terrain_icon_leads_its_patterns() {
     let (mut app, _dir) = project_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     open_palette(&mut app);
@@ -616,13 +622,13 @@ fn a_terrain_with_an_icon_shows_that_tile() {
     let set = tileset(&app);
     let marsh = set.terrains.last().expect("added");
     assert_eq!((marsh.name.as_str(), marsh.icon), ("marsh", Some((0, 5))));
+    ok(&mut app, PICK, &[("terrain", text("marsh"))]);
     let (min, size) = set.sheet_rect(0, 5).expect("a tile");
-    let rects: Vec<Option<Rect>> = app
-        .world_mut()
-        .query::<(&PaletteCell, &Children)>()
-        .iter(app.world())
-        .filter(|(cell, _)| cell.item == PaletteItem::Terrain(marsh.id))
-        .flat_map(|(_, children)| children.iter().collect::<Vec<_>>())
+    let shown = patterns(&mut app);
+    let (first, at) = *shown.first().expect("the icon pattern");
+    assert_eq!(at, (0, 5));
+    let rects: Vec<Option<Rect>> = (app.world().get::<Children>(first).expect("a tile"))
+        .iter()
         .map(|child| app.world().get::<ImageNode>(child).and_then(|i| i.rect))
         .collect();
     assert_eq!(
@@ -702,7 +708,7 @@ fn the_header_holds_the_name_the_turns_save_and_contiguous_in_order() {
     open_palette(&mut app);
     enter(&mut app, map);
     run(&mut app, "tilemap.bucket");
-    let mut expected = vec!["overworld".to_string()];
+    let mut expected = vec!["overworld".to_string(), TAB.to_string(), TAB.to_string()];
     expected.extend(TURNS.iter().map(ToString::to_string));
     expected.extend(["tilemap.stamp.save".to_string(), "contiguous".to_string()]);
     assert_eq!(header_controls(&mut app), expected);
@@ -772,6 +778,7 @@ fn the_tiles_fit_the_dock_width() {
         node.max_width = px(500.0);
     }
     enter(&mut app, map);
+    ok(&mut app, TAB, &[("tab", text("tiles"))]);
     let edges = |app: &App, entity: Entity| {
         let node = app.world().get::<ComputedNode>(entity).expect("laid out");
         let at = app
@@ -863,19 +870,20 @@ fn the_empty_palette_enters_tile_edit_mode() {
 }
 
 #[test]
-fn tile_and_terrain_cells_share_the_selection_outline() {
+fn pattern_and_tile_cells_share_the_selection_outline() {
     let (mut app, _dir) = project_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     open_palette(&mut app);
     enter(&mut app, map);
-    let border = |app: &mut App, tile: bool| {
-        let (cell, _) = *cells(app)
-            .iter()
-            .find(|(_, i)| matches!(i, PaletteItem::Tile(..)) == tile)
-            .expect("a cell");
-        app.world().get::<Node>(cell).expect("a node").border
-    };
-    assert_eq!(border(&mut app, true), border(&mut app, false));
+    let border = |app: &mut App, entity: Entity| app.world().get::<Node>(entity).expect("a node").border;
+    let (pattern, _) = *patterns(&mut app).first().expect("a pattern");
+    let pattern = border(&mut app, pattern);
+    ok(&mut app, TAB, &[("tab", text("tiles"))]);
+    let (tile, _) = *cells(&mut app)
+        .iter()
+        .find(|(_, i)| matches!(i, PaletteItem::Tile(..)))
+        .expect("a tile cell");
+    assert_eq!(pattern, border(&mut app, tile));
 }
 
 #[test]
@@ -936,5 +944,345 @@ fn a_sheet_wider_than_the_dock_scrolls_sideways_at_the_smallest_tiles() {
         "the sheet overflows sideways: {:?} in {:?}",
         node.content_size(),
         node.size()
+    );
+}
+
+/// Clicks the palette tab whose operator call names `tab`.
+fn click_tab(app: &mut App, tab: &str) {
+    let found = app
+        .world_mut()
+        .query_filtered::<(Entity, &ButtonOperatorCall), With<TabStripTab>>()
+        .iter(app.world())
+        .find(|(_, call)| {
+            call.id == TAB && call.params.iter().any(|(_, v)| *v == text(tab))
+        })
+        .map(|(e, _)| e);
+    let entity = found.unwrap_or_else(|| panic!("a {tab} tab"));
+    app.world_mut().trigger(Activate { entity });
+    settle(app);
+}
+
+/// The pattern cells of the Terrains tab in order, with their sheet and tile.
+fn patterns(app: &mut App) -> Vec<(Entity, (u32, u32))> {
+    let holder = app
+        .world_mut()
+        .query_filtered::<Entity, With<TerrainPatterns>>()
+        .single(app.world())
+        .expect("one pattern list");
+    let mut out = Vec::new();
+    let mut stack = vec![holder];
+    while let Some(at) = stack.pop() {
+        if let Some(PaletteCell {
+            item: PaletteItem::Pattern(sheet, tile),
+        }) = app.world().get::<PaletteCell>(at)
+        {
+            out.push((at, (*sheet, *tile)));
+            continue;
+        }
+        if let Some(children) = app.world().get::<Children>(at) {
+            stack.extend(children.iter().rev());
+        }
+    }
+    out
+}
+
+/// The texts under the Terrains tab's terrain list, in order.
+fn terrain_list(app: &mut App) -> Vec<String> {
+    fn walk(world: &World, entity: Entity, out: &mut Vec<String>) {
+        if world.get::<TerrainPatterns>(entity).is_some()
+            || world.get::<StrokeModeSegment>(entity).is_some()
+        {
+            return;
+        }
+        if let Some(text) = world.get::<Text>(entity) {
+            out.push(text.0.clone());
+        }
+        if let Some(children) = world.get::<Children>(entity) {
+            for child in children.iter() {
+                walk(world, child, out);
+            }
+        }
+    }
+    let section = app
+        .world_mut()
+        .query_filtered::<(Entity, &PaletteSection), ()>()
+        .iter(app.world())
+        .find(|(_, s)| **s == PaletteSection::Terrains)
+        .map(|(e, _)| e)
+        .expect("the Terrains tab");
+    let mut out = Vec::new();
+    walk(app.world(), section, &mut out);
+    out
+}
+
+/// The terrain list a tileset shows: set names as headers only with two or
+/// more sets, each set's own terrains by name.
+fn expected_list(set: &Tileset) -> Vec<String> {
+    let mut out: Vec<String> = (set.terrains.iter())
+        .filter(|t| set.set_of(t.id).is_none())
+        .map(|t| t.name.clone())
+        .collect();
+    for (index, each) in set.terrain_sets.iter().enumerate() {
+        if set.terrain_sets.len() > 1 {
+            out.push(each.name.clone());
+        }
+        out.extend(
+            (each.terrains.iter())
+                .filter(|id| set.set_of(**id) == Some(index))
+                .map(|id| set.terrain_name(*id)),
+        );
+    }
+    out
+}
+
+fn segment(app: &mut App, mode: StrokeMode) -> Entity {
+    app.world_mut()
+        .query::<(Entity, &StrokeModeSegment)>()
+        .iter(app.world())
+        .find(|(_, s)| s.0 == mode)
+        .map(|(e, _)| e)
+        .expect("a stroke mode segment")
+}
+
+fn checked_mode(app: &mut App) -> Vec<StrokeMode> {
+    app.world_mut()
+        .query_filtered::<&StrokeModeSegment, With<Checked>>()
+        .iter(app.world())
+        .map(|s| s.0)
+        .collect()
+}
+
+/// Presses a segment of the Connect / Path toggle as its radio group does.
+fn press_segment(app: &mut App, mode: StrokeMode) {
+    let pressed = segment(app, mode);
+    let bar = app.world().get::<ChildOf>(pressed).expect("in a bar").parent();
+    app.world_mut().trigger(ValueChange::<Entity> {
+        source: bar,
+        value: pressed,
+        is_final: true,
+    });
+    settle(app);
+}
+
+#[test]
+fn the_connect_path_toggle_sets_the_mode_a_stroke_paints_with() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    open_palette(&mut app);
+    enter(&mut app, map);
+    assert_eq!(checked_mode(&mut app), vec![StrokeMode::Connect]);
+    for mode in [StrokeMode::Connect, StrokeMode::Path] {
+        let tip = app.world().get::<Tooltip>(segment(&mut app, mode)).expect("a tooltip");
+        assert!(
+            !tip.description.is_empty() && !tip.description.contains('\n'),
+            "{mode:?} explains itself in one line"
+        );
+    }
+
+    press_segment(&mut app, StrokeMode::Path);
+    assert_eq!(brush(&app).mode, StrokeMode::Path);
+    assert_eq!(checked_mode(&mut app), vec![StrokeMode::Path]);
+    ok(&mut app, PICK, &[("terrain", text("2"))]);
+    stroke(&mut app, "tilemap.line", MouseButton::Left, &[(0, 2), (5, 2)]);
+    let data = stored(&mut app, map);
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
+    assert!(
+        authoring.links.get(CellCoord::new(2, 2)).is_path(),
+        "the stroke paints a path"
+    );
+
+    press_segment(&mut app, StrokeMode::Connect);
+    assert_eq!(brush(&app).mode, StrokeMode::Connect);
+    assert_eq!(checked_mode(&mut app), vec![StrokeMode::Connect]);
+}
+
+#[test]
+fn the_stroke_mode_operator_sets_toggles_and_refuses_other_modes() {
+    let (mut app, _dir) = project_app();
+    ok(&mut app, STROKE_MODE, &[("mode", text("path"))]);
+    assert_eq!(brush(&app).mode, StrokeMode::Path);
+    ok(&mut app, STROKE_MODE, &[]);
+    assert_eq!(brush(&app).mode, StrokeMode::Connect, "unset toggles");
+    ok(&mut app, STROKE_MODE, &[]);
+    assert_eq!(brush(&app).mode, StrokeMode::Path);
+    assert_eq!(
+        call(&mut app, STROKE_MODE, &[("mode", text("loop"))]),
+        OperatorResult::Cancelled
+    );
+    assert_eq!(brush(&app).mode, StrokeMode::Path);
+}
+
+#[test]
+fn terrain_names_show_in_rows_grouped_by_set() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    open_palette(&mut app);
+    enter(&mut app, map);
+    let set = tileset(&app);
+    assert!(set.terrain_sets.len() > 1, "the fixture has several sets");
+    let list = terrain_list(&mut app);
+    assert_eq!(list, expected_list(&set));
+    for terrain in &set.terrains {
+        assert!(list.contains(&terrain.name), "{} is named", terrain.name);
+    }
+    for (row, item) in cells(&mut app) {
+        if let PaletteItem::Terrain(id) = item {
+            let children: Vec<Entity> =
+                (app.world().get::<Children>(row).expect("a row")).iter().collect();
+            assert_eq!(children.len(), 2, "terrain {id}: a swatch and a name");
+            let swatch = app.world().get::<BackgroundColor>(children[0]).expect("a swatch").0;
+            let own = set.terrains.iter().find(|t| t.id == id).expect("a terrain");
+            assert_eq!(swatch, Color::from(own.swatch.with_alpha(1.0)));
+            let name = app.world().get::<Text>(children[1]).expect("a name");
+            assert_eq!(name.0, own.name);
+        }
+    }
+}
+
+#[test]
+fn a_tileset_of_one_set_lists_its_terrains_without_a_header() {
+    let (mut app, dir) = project_app();
+    std::fs::copy(
+        crate::util::OVERWORLD_SHEET,
+        dir.path().join("assets/plain.png"),
+    )
+    .expect("copy the sheet");
+    ok(
+        &mut app,
+        "tileset.import",
+        &[("path", text("plain.png")), ("setup", text("none"))],
+    );
+    let path = "plain.tileset.bsn";
+    for name in ["sand", "rock"] {
+        ok(
+            &mut app,
+            "tileset.terrain.add",
+            &[("path", text(path)), ("name", text(name))],
+        );
+    }
+    let mut plain = ground_terrain();
+    plain.tileset = path.to_string();
+    let map = spawn_map(&mut app, vec![plain], grass_patch());
+    open_palette(&mut app);
+    enter(&mut app, map);
+    let plain = |app: &App| {
+        (app.world().resource::<Assets<Tileset>>().iter())
+            .map(|(_, t)| t.clone())
+            .find(|t| t.terrains.iter().any(|t| t.name == "sand"))
+            .expect("the plain tileset")
+    };
+    assert_eq!(plain(&app).terrain_sets.len(), 1);
+    assert_eq!(terrain_list(&mut app), ["sand", "rock"]);
+
+    ok(
+        &mut app,
+        "tileset.terrain_set.add",
+        &[("path", text(path)), ("name", text("Cliffs"))],
+    );
+    ok(
+        &mut app,
+        "tileset.terrain.add",
+        &[
+            ("path", text(path)),
+            ("name", text("stone")),
+            ("set", text("Cliffs")),
+        ],
+    );
+    let set = plain(&app);
+    assert_eq!(set.terrain_sets.len(), 2);
+    let list = terrain_list(&mut app);
+    assert_eq!(list, expected_list(&set));
+    assert_eq!(list.len(), 5, "two headers and three terrains: {list:?}");
+    assert_eq!(list[3], "Cliffs");
+    assert_eq!(list[4], "stone");
+}
+
+#[test]
+fn picking_a_terrain_arms_its_brush_and_lists_its_full_tiles() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    open_palette(&mut app);
+    enter(&mut app, map);
+    ok(&mut app, PICK, &[("tile", text("0:5"))]);
+    let rows: Vec<(Entity, PaletteItem)> = cells(&mut app)
+        .into_iter()
+        .filter(|(_, i)| matches!(i, PaletteItem::Terrain(_)))
+        .collect();
+    let (water, _) = *rows
+        .iter()
+        .find(|(_, i)| *i == PaletteItem::Terrain(2))
+        .expect("terrain 2");
+    app.world_mut().trigger(Activate { entity: water });
+    settle(&mut app);
+    let armed = brush(&app);
+    assert_eq!((armed.source, armed.terrain), (BrushSource::Terrain, 2));
+    let set = tileset(&app);
+    let listed: Vec<(u32, u32)> = patterns(&mut app).into_iter().map(|(_, at)| at).collect();
+    assert_eq!(listed, full_tiles(&set, 2));
+    assert!(!listed.is_empty(), "water has full tiles");
+    for (sheet, tile) in &listed {
+        let t = (set.tiles.iter())
+            .find(|t| (t.sheet, t.tile) == (*sheet, *tile))
+            .expect("a set up tile");
+        let corners = [0, 2, 6, 8].iter().all(|&p| t.peers[p] == 2);
+        let sides = [1, 3, 4, 5, 7].iter().all(|&p| t.peers[p] == 2);
+        assert!(corners || sides, "{sheet}:{tile} is all water");
+    }
+
+    let after: Vec<(Entity, PaletteItem)> = cells(&mut app)
+        .into_iter()
+        .filter(|(_, i)| matches!(i, PaletteItem::Terrain(_)))
+        .collect();
+    assert_eq!(after, rows, "a pick keeps the terrain rows");
+
+    let (first, (sheet, tile)) = patterns(&mut app)[0];
+    app.world_mut().trigger(Activate { entity: first });
+    settle(&mut app);
+    let plain = brush(&app);
+    assert_eq!(
+        (plain.source, plain.tile),
+        (BrushSource::Tile, packed(&app, sheet, tile)),
+        "a pattern arms a plain tile brush"
+    );
+    assert_eq!(plain.terrain, 2, "the patterns stay on water");
+    assert_eq!(selected(&mut app), vec![PaletteItem::Pattern(sheet, tile)]);
+    stroke(&mut app, "tilemap.brush", MouseButton::Left, &[(2, 2)]);
+    let data = stored(&mut app, map);
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
+    assert_eq!(
+        authoring.overrides.get(&CellCoord::new(2, 2)),
+        Some(&packed(&app, sheet, tile))
+    );
+
+    let other: TerrainId = 1;
+    ok(&mut app, PICK, &[("terrain", text(&other.to_string()))]);
+    let listed: Vec<(u32, u32)> = patterns(&mut app).into_iter().map(|(_, at)| at).collect();
+    assert_eq!(listed, full_tiles(&set, other), "the patterns follow the pick");
+}
+
+#[test]
+fn a_tile_layer_has_no_tabs_and_a_terrain_layer_switches_them() {
+    let (mut app, _dir) = project_app();
+    open_palette(&mut app);
+    tile_map(&mut app, &[]);
+    let tabs = |app: &mut App| {
+        app.world_mut()
+            .query_filtered::<(), With<TabStripTab>>()
+            .iter(app.world())
+            .count()
+    };
+    assert_eq!(tabs(&mut app), 0, "a tile layer shows its tiles alone");
+
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    enter(&mut app, map);
+    assert_eq!(tabs(&mut app), 2);
+    assert_eq!(sections(&mut app), vec![PaletteSection::Terrains]);
+    click_tab(&mut app, "tiles");
+    assert!(!sections(&mut app).contains(&PaletteSection::Terrains));
+    click_tab(&mut app, "terrains");
+    assert_eq!(sections(&mut app), vec![PaletteSection::Terrains]);
+    assert_eq!(
+        call(&mut app, TAB, &[("tab", text("stamps"))]),
+        OperatorResult::Cancelled
     );
 }

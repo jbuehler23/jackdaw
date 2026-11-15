@@ -1,11 +1,14 @@
-//! The Tile Palette window and the brush it loads: the terrains, tiles and
-//! saved stamps of the active layer's tileset, a dragged rectangle of tiles as
-//! a stamp, flip and rotate of a loaded tile or stamp, and the Bucket's
-//! Contiguous toggle. Every change goes through an operator.
+//! The Tile Palette window and the brush it loads: on a terrain layer a
+//! Terrains tab of named terrains, the Connect / Path stroke mode and the
+//! picked terrain's full tiles; the tiles and saved stamps of the active
+//! layer's tileset, a dragged rectangle of tiles as a stamp, flip and rotate
+//! of a loaded tile or stamp, and the Bucket's Contiguous toggle. Every change
+//! goes through an operator.
 
 use bevy::feathers::controls::FeathersCheckbox;
 use bevy::feathers::theme::ThemedText;
 use bevy::picking::events::{PointerDragEnd, PointerDragEnter, PointerDragStart};
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::Checked;
 use bevy::ui_widgets::{Button, ValueChange};
@@ -16,7 +19,9 @@ use jackdaw_api_internal::operator::{RefreshOperatorButtons, warn_caller};
 use jackdaw_feathers::button::{ButtonOperatorCall, ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::icons::Icon;
 use jackdaw_feathers::scroll::{scroll_area, scrollbar};
-use jackdaw_feathers::tokens;
+use jackdaw_feathers::tab_strip::{TabStripItem, TabStripOrientation, spawn_tab_strip};
+use jackdaw_feathers::tooltip::Tooltip;
+use jackdaw_feathers::{segmented, tokens};
 use jackdaw_panels::area::DockWindow;
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{TerrainId, TileRef};
@@ -24,7 +29,7 @@ use jackdaw_tileset::{TerrainMatch, Tileset, TilesetTile};
 
 use crate::tile_stamp::{StampBrush, TileStamp, flipped_x, flipped_y, rectangle_tiles, rotated};
 use crate::tile_tools::{
-    BrushSource, TileBrush, TileEditMode, TileTool, TilemapEditModeOp, has_tile_map,
+    BrushSource, StrokeMode, TileBrush, TileEditMode, TileTool, TilemapEditModeOp, has_tile_map,
 };
 use crate::tilemap_ops::TilemapCreateOp;
 use crate::tilemap_stroke::packed_tile;
@@ -35,6 +40,9 @@ pub use jackdaw_editor_core::tile_mode::TILE_PALETTE_WINDOW_ID;
 
 /// On-screen size of one palette tile.
 const CELL: f32 = 32.0;
+
+/// On-screen size of a terrain row's swatch.
+const SWATCH: f32 = 14.0;
 
 /// The brush turn operators and their icons, as the palette header and the
 /// 2D toolbar show them.
@@ -53,18 +61,23 @@ pub(crate) fn plugin(app: &mut App) {
         (
             refresh_on_tileset_events,
             refresh_on_state.run_if(
-                |mode: Res<TileEditMode>, brush: Res<TileBrush>, stamp: Res<StampBrush>| {
-                    mode.is_changed() || brush.is_changed() || stamp.is_changed()
+                |mode: Res<TileEditMode>,
+                 brush: Res<TileBrush>,
+                 stamp: Res<StampBrush>,
+                 tab: Res<PaletteTab>| {
+                    mode.is_changed() || brush.is_changed() || stamp.is_changed() || tab.is_changed()
                 },
             ),
         ),
     )
     .init_resource::<PaletteDrag>()
+    .init_resource::<PaletteTab>()
     .init_resource::<MapsChanged>()
     .add_observer(refresh_on_map_change::<Add<Tilemap>>)
     .add_observer(refresh_on_map_change::<Remove<Tilemap>>)
     .add_observer(show_contiguous)
     .add_observer(on_contiguous_change)
+    .add_observer(on_stroke_mode_change)
     .add_observer(on_tile_drag_start)
     .add_observer(on_tile_drag_enter)
     .add_observer(on_tile_drag_end);
@@ -86,7 +99,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, context: Entity) {
         .register_operator::<TilemapBrushFlipXOp>()
         .register_operator::<TilemapBrushFlipYOp>()
         .register_operator::<TilemapBrushRotateOp>()
-        .register_operator::<TilemapBucketContiguousOp>();
+        .register_operator::<TilemapBucketContiguousOp>()
+        .register_operator::<TilemapBrushStrokeModeOp>()
+        .register_operator::<TilemapPaletteTabOp>();
     crate::tile_stamp::add_to_extension(ctx);
     ctx.bind_operator_in::<TilemapBrushFlipXOp>(context, [PresetInput::key("KeyX")])
         .bind_operator_in::<TilemapBrushFlipYOp>(context, [PresetInput::key("KeyY")])
@@ -109,6 +124,28 @@ struct Shown {
     any_map: bool,
     /// The tileset's asset, or why the path names none.
     tileset: Result<AssetId<Tileset>, String>,
+    /// The tab shown: always Tiles on a tile layer.
+    tab: PaletteTab,
+}
+
+/// Which tab of the palette shows on a terrain layer. A tile layer has the
+/// Tiles tab only.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaletteTab {
+    /// The terrains, the stroke mode and the picked terrain's full tiles.
+    #[default]
+    Terrains,
+    /// The tileset's sheets and saved stamps.
+    Tiles,
+}
+
+impl PaletteTab {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Terrains => "terrains",
+            Self::Tiles => "tiles",
+        }
+    }
 }
 
 /// The row of brush controls above the palette body.
@@ -133,6 +170,8 @@ pub enum PaletteItem {
     Terrain(TerrainId),
     /// Sheet and tile.
     Tile(u32, u32),
+    /// Sheet and tile of a full tile of the picked terrain.
+    Pattern(u32, u32),
     /// Index into the tileset's stamps.
     Stamp(usize),
 }
@@ -156,6 +195,17 @@ struct PaletteDrag {
 /// The Bucket's Contiguous checkbox, shown while the Bucket is the tool.
 #[derive(Component)]
 pub struct ContiguousToggle;
+
+/// One segment of the Connect / Path toggle of the Terrains tab.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct StrokeModeSegment(pub StrokeMode);
+
+/// The full tiles of the picked terrain under the terrain list, and which
+/// terrain they were built for.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TerrainPatterns {
+    pub terrain: TerrainId,
+}
 
 /// Load the brush from the palette.
 #[operator(
@@ -338,6 +388,66 @@ pub(crate) fn tilemap_bucket_contiguous(
     OperatorResult::Finished
 }
 
+/// Set how a terrain stroke joins the terrain around it.
+#[operator(
+    id = "tilemap.brush.stroke_mode",
+    label = "Terrain Stroke Mode",
+    description = "Set whether a terrain stroke joins every neighbor of its terrain, or only the \
+                   cells of the same stroke.",
+    allows_undo = false,
+    params(mode(
+        String,
+        doc = "connect joins every neighbor of the terrain; path joins only the cells of the \
+               same stroke. Unset toggles."
+    ))
+)]
+pub(crate) fn tilemap_brush_stroke_mode(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    let current = world.resource::<TileBrush>().mode;
+    let mode = match crate::tileset_edit::text(&params, "mode").as_str() {
+        "" if current == StrokeMode::Connect => StrokeMode::Path,
+        "" => StrokeMode::Connect,
+        name => match StrokeMode::from_name(name) {
+            Ok(mode) => mode,
+            Err(err) => {
+                warn_caller(world, format!("{}: {err}", TilemapBrushStrokeModeOp::ID));
+                return OperatorResult::Cancelled;
+            }
+        },
+    };
+    if current != mode {
+        world.resource_mut::<TileBrush>().mode = mode;
+    }
+    OperatorResult::Finished
+}
+
+/// Show the Terrains or the Tiles tab of the palette.
+#[operator(
+    id = "tilemap.palette.tab",
+    label = "Tile Palette Tab",
+    description = "Show the terrains of a terrain layer, or the tiles and stamps of its tileset.",
+    allows_undo = false,
+    params(tab(String, doc = "terrains or tiles."))
+)]
+pub(crate) fn tilemap_palette_tab(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    let tab = match crate::tileset_edit::text(&params, "tab").as_str() {
+        "terrains" => PaletteTab::Terrains,
+        "tiles" => PaletteTab::Tiles,
+        other => {
+            let err = format!("tab is terrains or tiles, not `{other}`");
+            warn_caller(world, format!("{}: {err}", TilemapPaletteTabOp::ID));
+            return OperatorResult::Cancelled;
+        }
+    };
+    world.resource_mut::<PaletteTab>().set_if_neq(tab);
+    OperatorResult::Finished
+}
+
 fn build_palette(world: &mut World, parent: Entity) {
     if world.get::<DockWindow>(parent).is_none() {
         return;
@@ -372,6 +482,11 @@ fn shown(world: &mut World, maps: bool) -> Shown {
         && (world.query_filtered::<(), With<Tilemap>>().iter(world))
             .next()
             .is_some();
+    let tab = if terrain_layer {
+        *world.resource::<PaletteTab>()
+    } else {
+        PaletteTab::Tiles
+    };
     Shown {
         map: mode.map,
         layer: mode.layer,
@@ -379,11 +494,13 @@ fn shown(world: &mut World, maps: bool) -> Shown {
         path,
         any_map,
         tileset: crate::tile_tools::active_tileset(world),
+        tab,
     }
 }
 
-/// Build every palette again whose layer or tileset changed, or all of them
-/// when `force`, then bring the highlight and the toggle up to date.
+/// Build every palette again whose layer, tileset or tab changed, or all of
+/// them when `force`, show the picked terrain's full tiles, then bring the
+/// highlight and the toggles up to date.
 fn refresh(world: &mut World, force: bool) {
     let now = shown(world, true);
     let roots: Vec<Entity> = (world.query::<(Entity, &TilePalette)>().iter(world))
@@ -392,6 +509,19 @@ fn refresh(world: &mut World, force: bool) {
         .collect();
     for root in roots {
         fill(world, root);
+    }
+    let terrain = world.resource::<TileBrush>().terrain;
+    let stale: Vec<Entity> = (world.query::<(Entity, &TerrainPatterns)>().iter(world))
+        .filter(|(_, p)| p.terrain != terrain)
+        .map(|(e, _)| e)
+        .collect();
+    let tileset = (now.tileset.ok())
+        .and_then(|id| world.resource::<Assets<Tileset>>().get(id))
+        .cloned();
+    if let Some(tileset) = tileset {
+        for holder in stale {
+            fill_patterns(world, holder, &tileset, terrain);
+        }
     }
     mark(world);
 }
@@ -502,22 +632,30 @@ fn mark(world: &mut World) {
                     && held == Some((sheet, tile))
             }
         }
+        PaletteItem::Pattern(sheet, tile) => {
+            brush.source == BrushSource::Tile && held == Some((sheet, tile))
+        }
         PaletteItem::Terrain(id) => {
             now.terrain_layer && brush.source == BrushSource::Terrain && brush.terrain == id
         }
         PaletteItem::Stamp(index) => brush.source == BrushSource::Stamp && saved == Some(index),
     };
-    let changed: Vec<(Entity, bool)> = (cells.into_iter())
-        .filter_map(|(cell, item, was)| (selected(item) != was).then_some((cell, !was)))
+    let changed: Vec<(Entity, PaletteItem, bool)> = (cells.into_iter())
+        .filter_map(|(cell, item, was)| (selected(item) != was).then_some((cell, item, !was)))
         .collect();
-    for (cell, now) in changed {
-        let outline = if now {
-            tokens::SELECTED_BORDER
-        } else {
-            Color::NONE
-        };
+    for (cell, item, now) in changed {
         let mut entity = world.entity_mut(cell);
-        entity.insert(BorderColor::all(outline));
+        if let PaletteItem::Terrain(_) = item {
+            let row = if now { tokens::SELECTED_BG } else { Color::NONE };
+            entity.insert(BackgroundColor(row));
+        } else {
+            let outline = if now {
+                tokens::SELECTED_BORDER
+            } else {
+                Color::NONE
+            };
+            entity.insert(BorderColor::all(outline));
+        }
         if now {
             entity.insert(PaletteSelected);
         } else {
@@ -535,6 +673,24 @@ fn mark(world: &mut World) {
             } else {
                 world.entity_mut(toggle).remove::<Checked>();
             }
+        }
+    }
+    let segments: Vec<(Entity, StrokeModeSegment, bool)> = (world
+        .query::<(Entity, &StrokeModeSegment, Has<Checked>)>())
+    .iter(world)
+    .map(|(e, segment, checked)| (e, *segment, checked))
+    .collect();
+    for (segment, StrokeModeSegment(mode), checked) in segments {
+        let on = mode == brush.mode;
+        if on == checked {
+            continue;
+        }
+        let mut entity = world.entity_mut(segment);
+        entity.insert(BackgroundColor(segmented::segment_background(on)));
+        if on {
+            entity.insert(Checked);
+        } else {
+            entity.remove::<Checked>();
         }
     }
 }
@@ -575,7 +731,8 @@ fn fill(world: &mut World, root: Entity) {
             return;
         }
     };
-    spawn_header(world, root, &now.path);
+    let tabs = now.terrain_layer.then_some(now.tab);
+    spawn_header(world, root, &now.path, tabs);
     let row = world
         .spawn((
             Node {
@@ -603,26 +760,9 @@ fn fill(world: &mut World, root: Entity) {
         ))
         .id();
     world.spawn((scrollbar(body), ChildOf(row)));
-    if now.terrain_layer {
-        let terrains = section(world, body, PaletteSection::Terrains, "Terrains");
-        for terrain in &tileset.terrains {
-            let fixed = Node {
-                width: px(CELL),
-                height: px(CELL),
-                ..default()
-            };
-            let cell = spawn_cell(world, terrains, PaletteItem::Terrain(terrain.id), fixed);
-            let call = ButtonOperatorCall::new(TilemapPalettePickOp::ID)
-                .with_param("terrain", terrain.id.to_string());
-            world.entity_mut(cell).insert(call);
-            match terrain.icon.or_else(|| centre_tile(&tileset, terrain.id)) {
-                Some((sheet, tile)) => spawn_tile(world, cell, &tileset, sheet, tile),
-                None => {
-                    let color = swatch(&tileset, terrain.id, 1.0);
-                    world.entity_mut(cell).insert(BackgroundColor(color));
-                }
-            }
-        }
+    if now.tab == PaletteTab::Terrains {
+        spawn_terrains_tab(world, body, &tileset);
+        return;
     }
     let tiles = section(world, body, PaletteSection::Tiles, "Tiles");
     world.entity_mut(tiles).insert(Node {
@@ -689,9 +829,10 @@ fn fill(world: &mut World, root: Entity) {
     }
 }
 
-/// The header: the tileset's name, the brush turns lit by the brush, Save
-/// stamp, and the Bucket's Contiguous toggle.
-fn spawn_header(world: &mut World, root: Entity, path: &str) {
+/// The header: the tileset's name, the tabs of a terrain layer with `tab`
+/// current, the brush turns lit by the brush, Save stamp, and the Bucket's
+/// Contiguous toggle.
+fn spawn_header(world: &mut World, root: Entity, path: &str, tab: Option<PaletteTab>) {
     let header = world
         .spawn((
             PaletteHeader,
@@ -718,6 +859,22 @@ fn spawn_header(world: &mut World, root: Entity, path: &str) {
         font_size: tokens::TEXT_SIZE,
         ..default()
     });
+    if let Some(tab) = tab {
+        let items = [(PaletteTab::Terrains, "Terrains"), (PaletteTab::Tiles, "Tiles")]
+            .map(|(each, label)| TabStripItem::new(label, each == tab, each.name()));
+        {
+            let mut commands = world.commands();
+            spawn_tab_strip(
+                &mut commands,
+                header,
+                TilemapPaletteTabOp::ID,
+                "tab",
+                TabStripOrientation::Horizontal,
+                items,
+            );
+        }
+        world.flush();
+    }
     let turns = spawn_group(world, header, tokens::TOOLBAR_GAP);
     for (id, icon) in BRUSH_TURNS {
         match world.spawn_scene(toolbar_op_button(id, icon)) {
@@ -852,10 +1009,205 @@ fn spawn_tile(world: &mut World, cell: Entity, tileset: &Tileset, sheet: u32, ti
     ));
 }
 
-/// A tile showing only `terrain`: one with all nine peers on it, else one
-/// with every peer its terrain set matches on it (the corners of a corners
-/// set, the sides and centre of a sides set).
-fn centre_tile(tileset: &Tileset, terrain: TerrainId) -> Option<(u32, u32)> {
+/// The Terrains tab: the Connect / Path toggle, the terrains as rows of
+/// swatch and name grouped by set, and the picked terrain's full tiles.
+fn spawn_terrains_tab(world: &mut World, body: Entity, tileset: &Tileset) {
+    let column = world
+        .spawn((
+            PaletteSection::Terrains,
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(tokens::SPACING_MD),
+                ..default()
+            },
+            ChildOf(body),
+        ))
+        .id();
+    spawn_stroke_modes(world, column);
+    if tileset.terrains.is_empty() {
+        let hint = "The tileset has no terrains yet.";
+        spawn_text(world, column, hint, tokens::TEXT_SECONDARY);
+        return;
+    }
+    let list = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            ChildOf(column),
+        ))
+        .id();
+    spawn_terrain_rows(world, list, tileset);
+    let patterns = world
+        .spawn((
+            TerrainPatterns { terrain: 0 },
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(tokens::SPACING_SM),
+                ..default()
+            },
+            ChildOf(column),
+        ))
+        .id();
+    let terrain = world.resource::<TileBrush>().terrain;
+    fill_patterns(world, patterns, tileset, terrain);
+}
+
+/// The Connect / Path toggle, lit by [`mark`] from the brush.
+fn spawn_stroke_modes(world: &mut World, parent: Entity) {
+    let bar = world
+        .spawn((segmented::segmented_bar(), ChildOf(parent)))
+        .id();
+    if let Some(mut node) = world.get_mut::<Node>(bar) {
+        node.height = px(tokens::ROW_HEIGHT);
+        node.align_self = AlignSelf::FlexStart;
+    }
+    let modes = [
+        (
+            StrokeMode::Connect,
+            "Connect",
+            "Paint joins every neighbor of the same terrain",
+        ),
+        (
+            StrokeMode::Path,
+            "Path",
+            "Paint joins only the cells of the same stroke",
+        ),
+    ];
+    for (mode, label, tip) in modes {
+        world.spawn((
+            segmented::segment(label),
+            StrokeModeSegment(mode),
+            Tooltip::title(label).with_description(tip),
+            Hovered::default(),
+            ChildOf(bar),
+        ));
+    }
+}
+
+/// Each set's terrains under a header of its name; a tileset of one set
+/// shows its terrains alone. Terrains of no set come first.
+fn spawn_terrain_rows(world: &mut World, parent: Entity, tileset: &Tileset) {
+    let headed = tileset.terrain_sets.len() > 1;
+    for terrain in (tileset.terrains.iter()).filter(|t| tileset.set_of(t.id).is_none()) {
+        spawn_terrain_row(world, parent, tileset, terrain.id, false);
+    }
+    for (index, set) in tileset.terrain_sets.iter().enumerate() {
+        if headed {
+            let header = spawn_text(world, parent, set.name.clone(), tokens::TEXT_SECONDARY);
+            world.entity_mut(header).insert(Node {
+                padding: UiRect::new(
+                    px(tokens::SPACING_SM),
+                    px(0.0),
+                    px(tokens::SPACING_SM),
+                    px(tokens::SPACING_XS),
+                ),
+                ..default()
+            });
+        }
+        for id in (set.terrains.iter()).filter(|id| tileset.set_of(**id) == Some(index)) {
+            spawn_terrain_row(world, parent, tileset, *id, headed);
+        }
+    }
+}
+
+/// A row that picks terrain `id`: its swatch and its name.
+fn spawn_terrain_row(
+    world: &mut World,
+    parent: Entity,
+    tileset: &Tileset,
+    id: TerrainId,
+    indented: bool,
+) {
+    let indent = if indented {
+        tokens::SPACING_LG
+    } else {
+        tokens::SPACING_SM
+    };
+    let row = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(tokens::SPACING_SM),
+                padding: UiRect::new(
+                    px(indent),
+                    px(tokens::SPACING_SM),
+                    px(tokens::SPACING_XS),
+                    px(tokens::SPACING_XS),
+                ),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            Button,
+            PaletteCell {
+                item: PaletteItem::Terrain(id),
+            },
+            ButtonOperatorCall::new(TilemapPalettePickOp::ID).with_param("terrain", id.to_string()),
+            ChildOf(parent),
+        ))
+        .id();
+    world.spawn((
+        Node {
+            width: px(SWATCH),
+            height: px(SWATCH),
+            flex_shrink: 0.0,
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+            ..default()
+        },
+        BackgroundColor(swatch(tileset, id, 1.0)),
+        Pickable::IGNORE,
+        ChildOf(row),
+    ));
+    spawn_text(world, row, tileset.terrain_name(id), tokens::TEXT_PRIMARY);
+}
+
+/// Fills `holder` with the full tiles of `terrain`, each picking itself as a
+/// plain tile.
+fn fill_patterns(world: &mut World, holder: Entity, tileset: &Tileset, terrain: TerrainId) {
+    world.entity_mut(holder).despawn_related::<Children>();
+    world.entity_mut(holder).insert(TerrainPatterns { terrain });
+    if !tileset.terrains.iter().any(|t| t.id == terrain) {
+        return;
+    }
+    let name = tileset.terrain_name(terrain);
+    let tiles = full_tiles(tileset, terrain);
+    let caption = if tiles.is_empty() {
+        format!("No tile is all {name}.")
+    } else {
+        format!("{name} tiles")
+    };
+    spawn_text(world, holder, caption, tokens::TEXT_SECONDARY);
+    let row = world
+        .spawn((
+            Node {
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: px(tokens::SPACING_XS),
+                row_gap: px(tokens::SPACING_XS),
+                ..default()
+            },
+            ChildOf(holder),
+        ))
+        .id();
+    for (sheet, tile) in tiles {
+        let fixed = Node {
+            width: px(CELL),
+            height: px(CELL),
+            ..default()
+        };
+        let cell = spawn_cell(world, row, PaletteItem::Pattern(sheet, tile), fixed);
+        let call =
+            ButtonOperatorCall::new(TilemapPalettePickOp::ID).with_param("tile", format!("{sheet}:{tile}"));
+        world.entity_mut(cell).insert(call);
+        spawn_tile(world, cell, tileset, sheet, tile);
+    }
+}
+
+/// The tiles showing only `terrain`: its icon first, then each tile with all
+/// nine peers on it or with every peer its terrain set matches on it (the
+/// corners of a corners set, the sides and center of a sides set).
+pub fn full_tiles(tileset: &Tileset, terrain: TerrainId) -> Vec<(u32, u32)> {
     const CORNERS: &[usize] = &[0, 2, 6, 8];
     const SIDES: &[usize] = &[1, 3, 4, 5, 7];
     const ALL: &[usize] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
@@ -869,11 +1221,20 @@ fn centre_tile(tileset: &Tileset, terrain: TerrainId) -> Option<(u32, u32)> {
             _ => ALL,
         }
     };
-    let shows = |t: &&TilesetTile, peers: &[usize]| peers.iter().all(|&p| t.peers[p] == terrain);
-    (tileset.tiles.iter())
-        .find(|t| shows(t, ALL))
-        .or_else(|| (tileset.tiles.iter()).find(|t| shows(t, used(t.set_inner, t.set_outer))))
-        .map(|t| (t.sheet, t.tile))
+    let shows = |t: &TilesetTile, peers: &[usize]| peers.iter().all(|&p| t.peers[p] == terrain);
+    let icon = (tileset.terrains.iter())
+        .find(|t| t.id == terrain)
+        .and_then(|t| t.icon);
+    let mut tiles: Vec<(u32, u32)> = icon.into_iter().collect();
+    let full = (tileset.tiles.iter())
+        .filter(|t| shows(t, ALL) || shows(t, used(t.set_inner, t.set_outer)))
+        .map(|t| (t.sheet, t.tile));
+    for tile in full {
+        if !tiles.contains(&tile) {
+            tiles.push(tile);
+        }
+    }
+    tiles
 }
 
 fn spawn_contiguous(world: &mut World, parent: Entity) {
@@ -906,6 +1267,25 @@ fn on_contiguous_change(
             .call();
         if let Err(err) = called {
             warn!("{}: {err}", TilemapBucketContiguousOp::ID);
+        }
+    });
+}
+
+fn on_stroke_mode_change(
+    change: On<ValueChange<Entity>>,
+    segments: Query<&StrokeModeSegment>,
+    mut commands: Commands,
+) {
+    let Ok(StrokeModeSegment(mode)) = segments.get(change.value).copied() else {
+        return;
+    };
+    commands.queue(move |world: &mut World| {
+        let called = world
+            .operator(TilemapBrushStrokeModeOp::ID)
+            .param("mode", mode.name())
+            .call();
+        if let Err(err) = called {
+            warn!("{}: {err}", TilemapBrushStrokeModeOp::ID);
         }
     });
 }
