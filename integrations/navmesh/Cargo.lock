@@ -4109,7 +4109,6 @@ dependencies = [
  "bevy",
  "bevy_reflect",
  "log",
- "nom",
  "path-slash",
  "pathdiff",
  "serde",

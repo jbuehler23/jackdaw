@@ -1,14 +1,5 @@
 use std::ops::Deref;
 
-use nom::{
-    IResult, Input, Parser,
-    branch::alt,
-    bytes::complete::{tag, tag_no_case, take_while, take_while1},
-    character::complete::{alpha1, alphanumeric1, char, digit1, multispace1, none_of, one_of},
-    combinator::{not, opt, recognize, value},
-    multi::{many0, many0_count},
-    sequence::{delimited, pair, terminated},
-};
 use thiserror::Error;
 
 use crate::syntax::span::Span;
@@ -59,12 +50,6 @@ pub enum Token {
     Greater,
 }
 
-impl Token {
-    fn spanned(self, span: Span<'_>) -> SpannedToken<'_> {
-        SpannedToken { span, token: self }
-    }
-}
-
 /// A [`Token`] coupled with the [`Span`] that produced it.
 #[derive(Debug, Clone)]
 pub struct SpannedToken<'a> {
@@ -83,58 +68,70 @@ impl Deref for SpannedToken<'_> {
     }
 }
 
-fn lex_token(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-    // `--` and the signed numbers come before `-`; the words before `lex_ident`.
-    alt((
-        lex_double_minus,
-        lex_special_float,
-        lex_true,
-        lex_false,
-        lex_ident,
-        lex_string,
-        lex_float,
-        lex_int,
-        lex_punctuation,
-    ))
-    .parse(input)
+/// A token read from the start of some text: the token, the byte range its
+/// span covers, and how many bytes it consumes. A string's span is its body
+/// without the quotes.
+struct Lexed {
+    token: Token,
+    span: std::ops::Range<usize>,
+    len: usize,
 }
 
-fn lex_punctuation(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-    alt((
-        lex_l_brace,
-        lex_r_brace,
-        lex_l_paren,
-        lex_r_paren,
-        lex_l_bracket,
-        lex_r_bracket,
-        lex_comma,
-        lex_double_colon,
-        lex_colon,
-        lex_minus,
-        lex_hash,
-        lex_at,
-        lex_less,
-        lex_greater,
-    ))
-    .parse(input)
+impl Lexed {
+    fn whole(token: Token, len: usize) -> Self {
+        Self {
+            token,
+            span: 0..len,
+            len,
+        }
+    }
 }
 
-/// Fails when an identifier character follows, so a word only matches whole.
-fn word_end(input: Span<'_>) -> IResult<Span<'_>, ()> {
-    not(one_of(
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_",
-    ))
-    .parse(input)
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-fn lex_true(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-    let (rest, value) = terminated(tag("true"), word_end).parse(input)?;
-    Ok((rest, Token::Bool(true).spanned(value)))
+/// True when no identifier character follows byte `at`, so a word only
+/// matches whole.
+fn word_ends_at(bytes: &[u8], at: usize) -> bool {
+    !bytes.get(at).copied().is_some_and(is_word_byte)
 }
 
-fn lex_false(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-    let (rest, value) = terminated(tag("false"), word_end).parse(input)?;
-    Ok((rest, Token::Bool(false).spanned(value)))
+fn count_while(bytes: &[u8], from: usize, mut pred: impl FnMut(u8) -> bool) -> usize {
+    bytes[from.min(bytes.len())..]
+        .iter()
+        .take_while(|&&b| pred(b))
+        .count()
+}
+
+/// Reads one token from the start of `text`, which holds no leading
+/// whitespace. `None` when no token starts there.
+fn lex_token(text: &str) -> Option<Lexed> {
+    let bytes = text.as_bytes();
+    let punctuation = |token| Some(Lexed::whole(token, 1));
+    match *bytes.first()? {
+        b'-' if bytes.get(1) == Some(&b'-') => Some(Lexed::whole(Token::DoubleMinus, 2)),
+        b'-' => lex_special_float(text)
+            .or_else(|| lex_number(text))
+            .or_else(|| punctuation(Token::Minus)),
+        b'a'..=b'z' | b'A'..=b'Z' | b'_' => Some(lex_ident(text)),
+        b'"' => lex_string(text),
+        b'0'..=b'9' | b'.' | b'+' => lex_number(text),
+        b'{' => punctuation(Token::LBrace),
+        b'}' => punctuation(Token::RBrace),
+        b'(' => punctuation(Token::LParen),
+        b')' => punctuation(Token::RParen),
+        b'[' => punctuation(Token::LBracket),
+        b']' => punctuation(Token::RBracket),
+        b',' => punctuation(Token::Comma),
+        b':' if bytes.get(1) == Some(&b':') => Some(Lexed::whole(Token::DoubleColon, 2)),
+        b':' => punctuation(Token::Colon),
+        b'#' => punctuation(Token::Hash),
+        b'@' => punctuation(Token::At),
+        b'<' => punctuation(Token::Less),
+        b'>' => punctuation(Token::Greater),
+        _ => None,
+    }
 }
 
 /// `-inf`, `-NaN`, and the `-Infinity` / `-nan` spellings the reflect
@@ -143,15 +140,16 @@ fn lex_false(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
 /// Unsigned, these words lex as identifiers, since a field, a variant or a
 /// path segment may be named `inf` or `Infinity`; the parser reads one as a
 /// float only where a value stands alone (see [`special_float`]).
-fn lex_special_float(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-    let (rest, raw) = recognize((
-        char('-'),
-        alt((tag("Infinity"), tag("inf"), tag("NaN"), tag("nan"))),
-        word_end,
-    ))
-    .parse(input)?;
-    let value = special_float(&raw.fragment[1..]).map_or(f64::NAN, |magnitude| -magnitude);
-    Ok((rest, Token::Float(value).spanned(raw)))
+fn lex_special_float(text: &str) -> Option<Lexed> {
+    let word = ["Infinity", "inf", "NaN", "nan"]
+        .into_iter()
+        .find(|word| text[1..].starts_with(word))?;
+    let len = 1 + word.len();
+    if !word_ends_at(text.as_bytes(), len) {
+        return None;
+    }
+    let value = special_float(word).map_or(f64::NAN, |magnitude| -magnitude);
+    Some(Lexed::whole(Token::Float(value), len))
 }
 
 /// The float an unsigned `inf`, `Infinity`, `NaN` or `nan` stands for.
@@ -163,196 +161,157 @@ pub(crate) fn special_float(word: &str) -> Option<f64> {
     }
 }
 
-fn lex_ident(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-    let (rest, value) = recognize(pair(
-        alt((alpha1, tag("_"))),
-        many0_count(alt((alphanumeric1, tag("_")))),
-    ))
-    .parse(input)?;
-    Ok((rest, Token::Ident(value.fragment.to_owned()).spanned(value)))
-}
-
-macro_rules! lex_symbol {
-    ($name:ident, $symbol:literal, $token:expr) => {
-        fn $name(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-            let (rest, value) = tag($symbol)(input)?;
-            Ok((rest, $token.spanned(value)))
-        }
+fn lex_ident(text: &str) -> Lexed {
+    let len = 1 + count_while(text.as_bytes(), 1, is_word_byte);
+    let token = match &text[..len] {
+        "true" => Token::Bool(true),
+        "false" => Token::Bool(false),
+        word => Token::Ident(word.to_owned()),
     };
+    Lexed::whole(token, len)
 }
 
-lex_symbol!(lex_l_bracket, "[", Token::LBracket);
-lex_symbol!(lex_r_bracket, "]", Token::RBracket);
-lex_symbol!(lex_l_paren, "(", Token::LParen);
-lex_symbol!(lex_r_paren, ")", Token::RParen);
-lex_symbol!(lex_l_brace, "{", Token::LBrace);
-lex_symbol!(lex_r_brace, "}", Token::RBrace);
-lex_symbol!(lex_comma, ",", Token::Comma);
-lex_symbol!(lex_colon, ":", Token::Colon);
-lex_symbol!(lex_double_colon, "::", Token::DoubleColon);
-lex_symbol!(lex_minus, "-", Token::Minus);
-lex_symbol!(lex_double_minus, "--", Token::DoubleMinus);
-lex_symbol!(lex_hash, "#", Token::Hash);
-lex_symbol!(lex_at, "@", Token::At);
-lex_symbol!(lex_less, "<", Token::Less);
-lex_symbol!(lex_greater, ">", Token::Greater);
+fn lex_number(text: &str) -> Option<Lexed> {
+    lex_float(text).or_else(|| lex_int(text))
+}
 
-fn lex_int(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-    let start = input.clone();
-    let (rest, (sign, radix_prefix, digits)) = (
-        opt(alt((tag("+"), tag("-")))),
-        opt(tag_no_case("0x")),
-        alt((
-            take_while1(|c: char| c.is_ascii_hexdigit()),
-            take_while1(|c: char| c.is_ascii_digit()),
-        )),
-    )
-        .parse(input.clone())?;
-
-    let is_hex = radix_prefix.is_some();
-    let is_negative = sign.map(|s| s.fragment) == Some("-");
-    let radix = if is_hex { 16 } else { 10 };
-
-    // Make sure decimal numbers have no hex digits.
-    if !is_hex
-        && digits
-            .fragment
-            .chars()
-            .any(|c| c.is_ascii_hexdigit() && !c.is_ascii_digit())
-    {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Digit,
-        )));
+/// An optional sign, then digits with a `.` among them and an optional
+/// exponent: `1.`, `.5`, `-1.5e3`.
+fn lex_float(text: &str) -> Option<Lexed> {
+    let bytes = text.as_bytes();
+    let sign = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let point = sign + count_while(bytes, sign, |b| b.is_ascii_digit());
+    if bytes.get(point) != Some(&b'.') {
+        return None;
     }
-
-    let int_span = Input::take(&start, (digits.offset - start.offset) + digits.len());
-    match i128::from_str_radix(digits.fragment, radix) {
-        Ok(integer) if is_negative => Ok((rest, Token::Int(-integer).spanned(int_span))),
-        Ok(integer) => Ok((rest, Token::Int(integer).spanned(int_span))),
-        Err(_) => Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Digit,
-        ))),
-    }
-}
-
-fn lex_float(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-    let (rest, raw) = recognize((
-        opt(one_of("+-")),
-        opt(digit1),
-        char('.'),
-        opt(digit1),
-        opt((one_of("eE"), opt(one_of("+-")), digit1)),
-    ))
-    .parse(input.clone())?;
-
-    // `.` isn't a valid number.
-    if raw.fragment == "." {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Float,
-        )));
-    }
-
-    let value: f64 = raw.fragment.parse().map_err(|_| {
-        nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Float))
-    })?;
-
-    Ok((rest, Token::Float(value).spanned(raw)))
-}
-
-/// `/* ... */`, nesting like Rust's block comments.
-fn lex_block_comment(input: Span<'_>) -> IResult<Span<'_>, ()> {
-    value(
-        (),
-        delimited(
-            tag("/*"),
-            many0(alt((
-                value((), lex_block_comment),
-                value((), none_of("*/")),
-                value((), terminated(char('*'), not(char('/')))),
-                value((), terminated(char('/'), not(char('*')))),
-            ))),
-            tag("*/"),
-        ),
-    )
-    .parse(input)
-}
-
-fn lex_line_comment(input: Span<'_>) -> IResult<Span<'_>, ()> {
-    value((), pair(tag("//"), take_while(|c: char| c != '\n'))).parse(input)
-}
-
-/// Whitespace and comments, which carry no tokens.
-fn lex_whitespace(input: Span<'_>) -> IResult<Span<'_>, ()> {
-    value(
-        (),
-        many0(alt((
-            value((), multispace1),
-            lex_line_comment,
-            lex_block_comment,
-        ))),
-    )
-    .parse(input)
-}
-
-fn lex_string(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
-    let (rest, (value_span, value)) = delimited(char('"'), string_body, char('"')).parse(input)?;
-    return Ok((rest, Token::StringLit(value).spanned(value_span)));
-
-    fn string_body(mut input: Span<'_>) -> IResult<Span<'_>, (Span<'_>, String)> {
-        let mut out = String::new();
-        let start = input.clone();
-        loop {
-            let (rest, chunk) = take_while(|c: char| c != '\\' && c != '"')(input)?;
-            out.push_str(chunk.fragment);
-            input = rest;
-
-            if input.starts_with('"') || input.is_empty() {
-                break;
-            }
-
-            let (rest, _) = char('\\')(input)?;
-            if rest.is_empty() {
-                out.push('\\');
-                input = rest;
-                break;
-            }
-            let esc_char = rest.chars().next().unwrap();
-            let rest = rest.take_from(esc_char.len_utf8());
-            match esc_char {
-                'n' => out.push('\n'),
-                'r' => out.push('\r'),
-                't' => out.push('\t'),
-                '0' => out.push('\0'),
-                '\\' => out.push('\\'),
-                '"' => out.push('"'),
-                'x' => {
-                    if rest.len() >= 2
-                        && let Some(hex) = rest.get(..2)
-                        && let Ok(byte) = u8::from_str_radix(hex, 16)
-                    {
-                        out.push(byte as char);
-                        input = rest.take_from(2);
-                        continue;
-                    }
-                    out.push('\\');
-                    out.push('x');
-                    input = rest;
-                    continue;
-                }
-                other => {
-                    out.push('\\');
-                    out.push(other);
-                }
-            }
-            input = rest;
+    let mut len = point + 1 + count_while(bytes, point + 1, |b| b.is_ascii_digit());
+    if matches!(bytes.get(len), Some(b'e' | b'E')) {
+        let exponent_sign = usize::from(matches!(bytes.get(len + 1), Some(b'+' | b'-')));
+        let digits_at = len + 1 + exponent_sign;
+        let digits = count_while(bytes, digits_at, |b| b.is_ascii_digit());
+        if digits > 0 {
+            len = digits_at + digits;
         }
-
-        let span_size = input.offset - start.offset;
-        Ok((input, (Input::take(&start, span_size), out)))
     }
+    let raw = &text[..len];
+    if raw == "." {
+        return None;
+    }
+    let value: f64 = raw.parse().ok()?;
+    Some(Lexed::whole(Token::Float(value), len))
+}
+
+/// An optional sign and `0x`, then the longest run of hex digits, which must
+/// all be decimal digits without the `0x`.
+fn lex_int(text: &str) -> Option<Lexed> {
+    let bytes = text.as_bytes();
+    let sign = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let is_negative = bytes.first() == Some(&b'-');
+    let is_hex = bytes.get(sign) == Some(&b'0') && matches!(bytes.get(sign + 1), Some(b'x' | b'X'));
+    let digits_at = sign + if is_hex { 2 } else { 0 };
+    let len = digits_at + count_while(bytes, digits_at, |b| b.is_ascii_hexdigit());
+    let digits = &text[digits_at..len];
+    if digits.is_empty() || (!is_hex && !digits.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    let integer = i128::from_str_radix(digits, if is_hex { 16 } else { 10 }).ok()?;
+    let value = if is_negative { -integer } else { integer };
+    Some(Lexed::whole(Token::Int(value), len))
+}
+
+/// `"..."` with the escapes `\n \r \t \0 \\ \" \xNN`; any other escape keeps
+/// its backslash. `None` when the closing quote is missing.
+fn lex_string(text: &str) -> Option<Lexed> {
+    let bytes = text.as_bytes();
+    let mut out = String::new();
+    let mut at = 1;
+    loop {
+        let chunk = count_while(bytes, at, |b| b != b'\\' && b != b'"');
+        out.push_str(&text[at..at + chunk]);
+        at += chunk;
+        if at == bytes.len() || bytes[at] == b'"' {
+            break;
+        }
+        at += 1;
+        let Some(escaped) = text[at..].chars().next() else {
+            out.push('\\');
+            break;
+        };
+        at += escaped.len_utf8();
+        match escaped {
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            '0' => out.push('\0'),
+            '\\' => out.push('\\'),
+            '"' => out.push('"'),
+            'x' => {
+                if let Some(hex) = text[at..].get(..2)
+                    && let Ok(byte) = u8::from_str_radix(hex, 16)
+                {
+                    out.push(byte as char);
+                    at += 2;
+                } else {
+                    out.push_str("\\x");
+                }
+            }
+            other => {
+                out.push('\\');
+                out.push(other);
+            }
+        }
+    }
+    if bytes.get(at) != Some(&b'"') {
+        return None;
+    }
+    Some(Lexed {
+        token: Token::StringLit(out),
+        span: 1..at,
+        len: at + 1,
+    })
+}
+
+/// The length of the `/* ... */` comment `text` starts with, nesting like
+/// Rust's block comments. `None` when it never closes.
+fn block_comment_len(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut at = 0;
+    while at + 1 < bytes.len() {
+        match (bytes[at], bytes[at + 1]) {
+            (b'/', b'*') => {
+                depth += 1;
+                at += 2;
+            }
+            (b'*', b'/') => {
+                depth -= 1;
+                at += 2;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => at += 1,
+        }
+    }
+    None
+}
+
+/// The length of the whitespace and comments `text` starts with.
+fn whitespace_len(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        match (byte, bytes.get(at + 1)) {
+            (b' ' | b'\t' | b'\r' | b'\n', _) => at += 1,
+            (b'/', Some(b'/')) => at += 2 + count_while(bytes, at + 2, |b| b != b'\n'),
+            (b'/', Some(b'*')) => match block_comment_len(&text[at..]) {
+                Some(len) => at += len,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    at
 }
 
 /// An error that occurs when lexing BSN.
@@ -366,24 +325,20 @@ pub enum LexError {
 impl<'a> Iterator for Span<'a> {
     type Item = Result<SpannedToken<'a>, LexError>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let (rest, ()) = lex_whitespace(self.clone()).ok()?;
-        *self = rest;
-        if self.fragment.is_empty() {
-            return None;
-        }
-
-        let start = self.clone();
-        match lex_token(start.clone()) {
-            Ok((rest, token)) => {
-                *self = rest;
-                Some(Ok(token))
+        self.advance(whitespace_len(self.fragment));
+        let first = self.fragment.chars().next()?;
+        match lex_token(self.fragment) {
+            Some(Lexed { token, span, len }) => {
+                let span = self.sub(span);
+                self.advance(len);
+                Some(Ok(SpannedToken { token, span }))
             }
-            Err(_) => {
-                let c = start.fragment.chars().next().unwrap();
+            None => {
                 // Stop here: the caller sees one error, not one per character.
                 self.fragment = "";
-                Some(Err(LexError::UnexpectedChar(c)))
+                Some(Err(LexError::UnexpectedChar(first)))
             }
         }
     }
@@ -391,7 +346,7 @@ impl<'a> Iterator for Span<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::lex::Token;
+    use crate::syntax::lex::{LexError, Token};
     use crate::syntax::span::Span;
 
     fn tokens(input: &str) -> Vec<Token> {
@@ -516,5 +471,179 @@ mod tests {
         assert_eq!(tokens[1].span.offset, 4);
         assert_eq!(tokens[1].span.line, 2);
         assert_eq!(tokens[2].span.line, 3);
+    }
+
+    fn lex(input: &str) -> Result<Vec<Token>, char> {
+        Span::from(input).lex_all().map_err(|err| match err {
+            LexError::UnexpectedChar(c) => c,
+        })
+    }
+
+    /// Each token's span as its text, offset and line.
+    fn spans(input: &str) -> Vec<(&str, usize, u32)> {
+        Span::from(input)
+            .map(|token| {
+                let span = token.expect("the input lexes").span;
+                (span.fragment, span.offset, span.line)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn numbers_lex_by_their_spelling() {
+        assert_eq!(lex("1."), Ok(vec![Token::Float(1.0)]));
+        assert_eq!(lex(".5"), Ok(vec![Token::Float(0.5)]));
+        assert_eq!(lex("1.e2"), Ok(vec![Token::Float(100.0)]));
+        assert_eq!(lex("-1.5E-1"), Ok(vec![Token::Float(-0.15)]));
+        assert_eq!(lex("+1.5"), Ok(vec![Token::Float(1.5)]));
+        assert_eq!(lex("+7"), Ok(vec![Token::Int(7)]));
+        assert_eq!(lex("0x1F -0X1f"), Ok(vec![Token::Int(31), Token::Int(-31)]));
+        assert_eq!(lex("007"), Ok(vec![Token::Int(7)]));
+        assert_eq!(
+            lex("1.5e"),
+            Ok(vec![Token::Float(1.5), Token::Ident("e".into())])
+        );
+        assert_eq!(
+            lex("5xyz"),
+            Ok(vec![Token::Int(5), Token::Ident("xyz".into())])
+        );
+        assert_eq!(
+            lex("--5 - 5"),
+            Ok(vec![
+                Token::DoubleMinus,
+                Token::Int(5),
+                Token::Minus,
+                Token::Int(5)
+            ])
+        );
+        assert_eq!(lex(&i128::MAX.to_string()), Ok(vec![Token::Int(i128::MAX)]));
+    }
+
+    #[test]
+    fn malformed_numbers_are_lex_errors() {
+        assert_eq!(lex("1e5"), Err('1'));
+        assert_eq!(lex("12ab"), Err('1'));
+        assert_eq!(lex("0xg"), Err('0'));
+        assert_eq!(lex("170141183460469231731687303715884105728"), Err('1'));
+        assert_eq!(lex("."), Err('.'));
+        assert_eq!(lex("+"), Err('+'));
+        assert_eq!(lex("-."), Err('.'));
+        assert_eq!(lex("1.5e+"), Err('+'));
+    }
+
+    #[test]
+    fn special_float_words_need_a_minus_and_a_word_end() {
+        assert_eq!(
+            lex("-infinity -Infinityx"),
+            Ok(vec![
+                Token::Minus,
+                Token::Ident("infinity".into()),
+                Token::Minus,
+                Token::Ident("Infinityx".into()),
+            ])
+        );
+        let tokens = lex("-inf]").unwrap();
+        assert!(matches!(tokens[0], Token::Float(f) if f == f64::NEG_INFINITY));
+        assert_eq!(tokens[1], Token::RBracket);
+    }
+
+    #[test]
+    fn string_escapes_read_as_their_characters() {
+        assert_eq!(
+            lex(r#""\n\r\t\0\\\"" "\x41" "\xZZ" "\x4" "\q" "\é""#),
+            Ok(vec![
+                Token::StringLit("\n\r\t\0\\\"".into()),
+                Token::StringLit("A".into()),
+                Token::StringLit("\\xZZ".into()),
+                Token::StringLit("\\x4".into()),
+                Token::StringLit("\\q".into()),
+                Token::StringLit("\\é".into()),
+            ])
+        );
+        assert_eq!(
+            lex("\"a\nb\" \"\u{e9}\u{4e2d}\""),
+            Ok(vec![
+                Token::StringLit("a\nb".into()),
+                Token::StringLit("\u{e9}\u{4e2d}".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_are_lex_errors() {
+        assert_eq!(lex(r#"A "abc"#), Err('"'));
+        assert_eq!(lex(r#""abc\"#), Err('"'));
+        assert_eq!(lex(r#""abc\""#), Err('"'));
+    }
+
+    #[test]
+    fn block_comments_nest_and_must_close() {
+        assert_eq!(lex("/**/ A /***/"), Ok(vec![Token::Ident("A".into())]));
+        assert_eq!(
+            lex("/* //* */ */ A /* * / */"),
+            Ok(vec![Token::Ident("A".into())])
+        );
+        assert_eq!(lex("A /* open"), Err('/'));
+        assert_eq!(lex("/* a/*/ b */"), Err('/'));
+        assert_eq!(lex("/*/"), Err('/'));
+        assert_eq!(lex("/* a */ */"), Err('*'));
+        assert_eq!(lex("a / b"), Err('/'));
+        assert_eq!(
+            lex("A // tail without a newline"),
+            Ok(vec![Token::Ident("A".into())])
+        );
+    }
+
+    #[test]
+    fn only_ascii_spaces_tabs_and_newlines_are_whitespace() {
+        assert_eq!(
+            lex("A\r\n\tB"),
+            Ok(vec![Token::Ident("A".into()), Token::Ident("B".into())])
+        );
+        assert_eq!(lex("A\u{c}B"), Err('\u{c}'));
+        assert_eq!(lex("A\u{a0}B"), Err('\u{a0}'));
+    }
+
+    #[test]
+    fn identifiers_are_ascii_words() {
+        assert_eq!(
+            lex("_ _9 a9_b true_ true]"),
+            Ok(vec![
+                Token::Ident("_".into()),
+                Token::Ident("_9".into()),
+                Token::Ident("a9_b".into()),
+                Token::Ident("true_".into()),
+                Token::Bool(true),
+                Token::RBracket,
+            ])
+        );
+        assert_eq!(lex("ab\u{e9}"), Err('\u{e9}'));
+        assert_eq!(lex(":::"), Ok(vec![Token::DoubleColon, Token::Colon]));
+    }
+
+    #[test]
+    fn spans_cover_each_token_as_written() {
+        assert_eq!(
+            spans("-0x1F -1.5e3 -inf\n\"a\nb\" /* x\n */ :: Foo"),
+            vec![
+                ("-0x1F", 0, 1),
+                ("-1.5e3", 6, 1),
+                ("-inf", 13, 1),
+                ("a\nb", 19, 2),
+                ("::", 33, 4),
+                ("Foo", 36, 4),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_lex_error_ends_the_tokens() {
+        let mut span = Span::from("A $ B");
+        assert!(matches!(span.next(), Some(Ok(_))));
+        assert!(matches!(
+            span.next(),
+            Some(Err(LexError::UnexpectedChar('$')))
+        ));
+        assert!(span.next().is_none());
     }
 }

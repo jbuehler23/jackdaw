@@ -148,6 +148,9 @@ fn owned(text: Cow<'_, str>) -> Option<String> {
 /// longer path (`my_jackdaw::`) and, unless it ends in `::`, not as the head
 /// of a longer name (`Tile` in `TileSet`).
 fn rename_paths<'a>(text: &'a str, renames: &[(&str, &str)]) -> Cow<'a, str> {
+    if let Some(prefix) = single_pass_prefix(renames) {
+        return rename_in_one_pass(text, renames, prefix);
+    }
     let mut out = Cow::Borrowed(text);
     for (old, new) in renames {
         if let Some(renamed) = owned(rename_path(&out, old, new)) {
@@ -157,22 +160,81 @@ fn rename_paths<'a>(text: &'a str, renames: &[(&str, &str)]) -> Cow<'a, str> {
     out
 }
 
+fn is_ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Whether `old` can be renamed where it starts at byte `at` of `text`: not
+/// the tail of a longer path and, unless it ends in `::`, not the head of a
+/// longer name.
+fn matches_whole(text: &str, at: usize, old: &str) -> bool {
+    let end = at + old.len();
+    let starts_path = text[..at]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !is_ident(c) && c != ':');
+    starts_path && (old.ends_with("::") || text[end..].chars().next().is_none_or(|c| !is_ident(c)))
+}
+
 fn rename_path<'a>(text: &'a str, old: &str, new: &str) -> Cow<'a, str> {
-    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
-    let prefix = old.ends_with("::");
     let mut out = String::new();
     let mut rest = 0;
     for (at, _) in text.match_indices(old) {
-        let end = at + old.len();
-        let starts_path = text[..at]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !is_ident(c) && c != ':');
-        let ends_name = prefix || text[end..].chars().next().is_none_or(|c| !is_ident(c));
-        if starts_path && ends_name {
+        if matches_whole(text, at, old) {
             out.push_str(&text[rest..at]);
             out.push_str(new);
-            rest = end;
+            rest = at + old.len();
+        }
+    }
+    if rest == 0 {
+        return Cow::Borrowed(text);
+    }
+    out.push_str(&text[rest..]);
+    Cow::Owned(out)
+}
+
+/// The prefix every old path shares, when renaming in one pass gives the
+/// same text as renaming one path after another. It does when every path is
+/// made of identifier characters and `::`, so no match can start inside
+/// another, and no new path can start a match of an old one.
+fn single_pass_prefix<'r>(renames: &[(&'r str, &str)]) -> Option<&'r str> {
+    let (first, _) = renames.first()?;
+    let prefix_len = renames.iter().fold(first.len(), |len, (old, _)| {
+        first
+            .bytes()
+            .zip(old.bytes())
+            .take(len)
+            .take_while(|(a, b)| a == b)
+            .count()
+    });
+    let prefix = first
+        .get(..prefix_len)
+        .filter(|prefix| !prefix.is_empty())?;
+    let is_path = |path: &str| path.chars().all(|c| is_ident(c) || c == ':');
+    renames
+        .iter()
+        .all(|(old, new)| {
+            is_path(old) && is_path(new) && !new.starts_with(prefix) && !prefix.starts_with(new)
+        })
+        .then_some(prefix)
+}
+
+/// Renames every path in one scan for the shared `prefix`, taking at each
+/// place the first rename in `renames` that matches there.
+fn rename_in_one_pass<'a>(text: &'a str, renames: &[(&str, &str)], prefix: &str) -> Cow<'a, str> {
+    let mut out = String::new();
+    let mut rest = 0;
+    for (at, _) in text.match_indices(prefix) {
+        if at < rest {
+            continue;
+        }
+        let found = renames
+            .iter()
+            .find(|(old, _)| text[at..].starts_with(old) && matches_whole(text, at, old));
+        if let Some((old, new)) = found {
+            out.push_str(&text[rest..at]);
+            out.push_str(new);
+            rest = at + old.len();
         }
     }
     if rest == 0 {
@@ -577,6 +639,62 @@ mod tests {
         let text =
             "jackdaw::tilemap::TileSet my_jackdaw::tilemap::Tile my_game::jackdaw::terrain::X";
         assert!(matches!(rename_paths(text, MOVES), Cow::Borrowed(_)));
+    }
+
+    fn one_rename_after_another(text: &str, renames: &[(&str, &str)]) -> String {
+        renames.iter().fold(text.to_string(), |out, (old, new)| {
+            rename_path(&out, old, new).into_owned()
+        })
+    }
+
+    #[test]
+    fn repeated_and_different_moved_types_rename_as_one_after_another() {
+        let text = "jackdaw::entity_ops::SceneLight\n\
+                    jackdaw::recipes::RecipeInput { of: jackdaw::recipes::Recipe }\n\
+                    jackdaw::entity_ops::SceneLight\n\
+                    [\"jackdaw::recipes::Recipe\", jackdaw::recipes::RecipeCall]";
+        let want = "jackdaw_editor_core::entity_ops::SceneLight\n\
+                    jackdaw_editor_core::recipes::RecipeInput { of: jackdaw_editor_core::recipes::Recipe }\n\
+                    jackdaw_editor_core::entity_ops::SceneLight\n\
+                    [\"jackdaw_editor_core::recipes::Recipe\", jackdaw_editor_core::recipes::RecipeCall]";
+        assert_eq!(moved_types(text), want);
+        assert_eq!(one_rename_after_another(text, MOVED_TYPES), want);
+    }
+
+    #[test]
+    fn overlapping_renames_apply_in_list_order() {
+        let module_first: &[(&str, &str)] = &[
+            ("jackdaw::terrain::", "jackdaw_editor_terrain::"),
+            ("jackdaw::terrain::Brush", "jackdaw_editor_tile::Brush"),
+        ];
+        let type_first: &[(&str, &str)] = &[module_first[1], module_first[0]];
+        let texts = [
+            "jackdaw::terrain::Brush jackdaw::terrain::Brushes jackdaw::terrain::X",
+            "jackdaw::terrain::Brush::Raise(jackdaw::terrain::Brush)",
+            "x_jackdaw::terrain::Brush :jackdaw::terrain::Brush jackdaw::terrain::",
+            "jackdaw::terrain::Brushjackdaw::terrain::Brush",
+        ];
+        for renames in [module_first, type_first, MOVES] {
+            assert!(single_pass_prefix(renames).is_some());
+            for text in texts {
+                assert_eq!(
+                    rename_paths(text, renames),
+                    one_rename_after_another(text, renames),
+                    "{text:?} with {renames:?}"
+                );
+            }
+        }
+        assert_eq!(
+            rename_paths(texts[0], type_first),
+            "jackdaw_editor_tile::Brush jackdaw_editor_terrain::Brushes jackdaw_editor_terrain::X"
+        );
+    }
+
+    #[test]
+    fn a_rename_into_another_old_path_still_chains() {
+        let chain: &[(&str, &str)] = &[("a::X", "a::Y"), ("a::Y", "a::Z")];
+        assert!(single_pass_prefix(chain).is_none());
+        assert_eq!(rename_paths("a::X a::Y", chain), "a::Z a::Z");
     }
 
     #[test]

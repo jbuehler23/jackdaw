@@ -1,7 +1,5 @@
 use std::fmt::Display;
 
-use nom::{Compare, Input, Offset};
-
 use crate::syntax::lex::{LexError, Token};
 
 /// A reference to a range of characters within a source string.
@@ -73,21 +71,21 @@ impl<'a> Span<'a> {
         format!("{message}. Line {}: {}", self.line, self.fragment)
     }
 
-    pub(crate) fn slice_by(&self, next_fragment: &'a str) -> Self {
-        let consumed_len = self.fragment.offset(next_fragment);
-        if consumed_len == 0 {
-            return Self {
-                line: self.line,
-                offset: self.offset,
-                fragment: next_fragment,
-            };
-        }
-        let consumed = &self.fragment[..consumed_len];
-        let lines = consumed.bytes().filter(|&b| b == b'\n').count() as u32;
+    /// Moves the start of the span `len` bytes on, counting the lines it
+    /// passes.
+    pub(crate) fn advance(&mut self, len: usize) {
+        let (consumed, rest) = self.fragment.split_at(len);
+        self.line += consumed.bytes().filter(|&b| b == b'\n').count() as u32;
+        self.offset += len;
+        self.fragment = rest;
+    }
+
+    /// The part of the span at `range`, a byte range on its first line.
+    pub(crate) fn sub(&self, range: std::ops::Range<usize>) -> Self {
         Self {
-            line: self.line + lines,
-            offset: self.offset + consumed_len,
-            fragment: next_fragment,
+            offset: self.offset + range.start,
+            fragment: &self.fragment[range],
+            line: self.line,
         }
     }
 
@@ -105,70 +103,5 @@ impl<'a> core::ops::Deref for Span<'a> {
     type Target = &'a str;
     fn deref(&self) -> &Self::Target {
         &self.fragment
-    }
-}
-
-impl<'a> Compare<&'a str> for Span<'a> {
-    fn compare(&self, t: &'a str) -> nom::CompareResult {
-        self.fragment.compare(t)
-    }
-
-    fn compare_no_case(&self, t: &'a str) -> nom::CompareResult {
-        self.fragment.compare_no_case(t)
-    }
-}
-
-impl Offset for Span<'_> {
-    fn offset(&self, second: &Self) -> usize {
-        second.offset - self.offset
-    }
-}
-
-impl<'a> Input for Span<'a> {
-    type Item = char;
-    type Iter = <&'a str as Input>::Iter;
-    type IterIndices = <&'a str as Input>::IterIndices;
-
-    #[inline]
-    fn input_len(&self) -> usize {
-        self.fragment.input_len()
-    }
-
-    #[inline]
-    fn take(&self, index: usize) -> Self {
-        self.slice_by(self.fragment.take(index))
-    }
-
-    #[inline]
-    fn take_from(&self, index: usize) -> Self {
-        self.slice_by(self.fragment.take_from(index))
-    }
-
-    #[inline]
-    fn take_split(&self, index: usize) -> (Self, Self) {
-        (self.take_from(index), self.take(index))
-    }
-
-    #[inline]
-    fn position<P>(&self, predicate: P) -> Option<usize>
-    where
-        P: Fn(Self::Item) -> bool,
-    {
-        self.fragment.position(predicate)
-    }
-
-    #[inline]
-    fn iter_elements(&self) -> Self::Iter {
-        self.fragment.iter_elements()
-    }
-
-    #[inline]
-    fn iter_indices(&self) -> Self::IterIndices {
-        self.fragment.iter_indices()
-    }
-
-    #[inline]
-    fn slice_index(&self, count: usize) -> Result<usize, nom::Needed> {
-        self.fragment.slice_index(count)
     }
 }

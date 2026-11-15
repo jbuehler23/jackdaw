@@ -183,9 +183,16 @@ fn value_from_syntax(value: syntax::types::BsnValue) -> BsnValue {
 /// would silently let the last occurrence win, hiding hand-edit mistakes.
 fn check_duplicate_fields(ast: &mut SceneBsnAst) -> Result<(), ParseError> {
     fn find_duplicate(data: &BsnStructData) -> Option<ParseError> {
+        let fields = &data.fields.0;
         let mut seen = std::collections::HashSet::new();
-        for BsnField { name, value } in &data.fields.0 {
-            if !seen.insert(name.as_str()) {
+        for (index, BsnField { name, value }) in fields.iter().enumerate() {
+            // Most structs have a handful of fields, where a scan beats hashing.
+            let repeated = if fields.len() <= 16 {
+                fields[..index].iter().any(|earlier| earlier.name == *name)
+            } else {
+                !seen.insert(name.as_str())
+            };
+            if repeated {
                 return Some(ParseError::DuplicateField {
                     type_name: data.type_path.clone(),
                     field: name.clone(),
