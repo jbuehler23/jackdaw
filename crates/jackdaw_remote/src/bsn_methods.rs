@@ -21,6 +21,23 @@ pub fn jackdaw_apply_bsn_handler(In(params): In<Option<Value>>, world: &mut Worl
         .and_then(|s| s.as_str())
         .ok_or_else(|| invalid_params("expected {\"source\": \"<bsn text>\"}".into()))?;
 
+    let spawned = apply_bsn_source(world, source)?;
+    let entities: Vec<u64> = spawned.iter().map(|node| node.entity.to_bits()).collect();
+    Ok(json!({ "entities": entities }))
+}
+
+/// One entity [`apply_bsn_source`] spawned, with the component patches its
+/// source authored.
+pub struct SpawnedBsnNode {
+    pub entity: Entity,
+    /// Every component patch the source wrote on this node, including the ones
+    /// for types this world cannot make live: a caller keeping a document needs
+    /// those, since the live entity has no trace of them.
+    pub patches: Vec<BsnPatch>,
+}
+
+/// Spawn BSN text into the live world. Parents come before their children.
+pub fn apply_bsn_source(world: &mut World, source: &str) -> Result<Vec<SpawnedBsnNode>, BrpError> {
     let ast = jackdaw_bsn::parse_bsn_text(source).map_err(|err| invalid_params(err.to_string()))?;
 
     let prior_ast = world.remove_resource::<SceneBsnAst>();
@@ -28,6 +45,17 @@ pub fn jackdaw_apply_bsn_handler(In(params): In<Option<Value>>, world: &mut Worl
     world.init_resource::<BsnSceneAssets>();
     let spawned = jackdaw_bsn::spawn_from_ast(world);
     jackdaw_bsn::apply_dirty_ast_patches(world);
+
+    let nodes = {
+        let ast = world.resource::<SceneBsnAst>();
+        spawned
+            .iter()
+            .map(|&entity| SpawnedBsnNode {
+                entity,
+                patches: authored_component_patches(ast, entity),
+            })
+            .collect()
+    };
 
     // The AST resource is transient here; strip the back references so a
     // later apply starts from a clean world.
@@ -42,8 +70,22 @@ pub fn jackdaw_apply_bsn_handler(In(params): In<Option<Value>>, world: &mut Worl
         world.insert_resource(prior_ast);
     }
 
-    let entities: Vec<u64> = spawned.iter().map(|entity| entity.to_bits()).collect();
-    Ok(json!({ "entities": entities }))
+    Ok(nodes)
+}
+
+/// The component patches `ast` holds for the live `entity`, leaving out names,
+/// children and base inheritance.
+fn authored_component_patches(ast: &SceneBsnAst, entity: Entity) -> Vec<BsnPatch> {
+    let Some(patches) = ast.ast_for(entity).and_then(|node| ast.get_patches(node)) else {
+        return Vec::new();
+    };
+    patches
+        .0
+        .iter()
+        .filter_map(|&patch_entity| ast.get_patch(patch_entity))
+        .filter(|patch| jackdaw_bsn::patch_type_path(patch).is_some())
+        .cloned()
+        .collect()
 }
 
 pub fn jackdaw_entity_bsn_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {

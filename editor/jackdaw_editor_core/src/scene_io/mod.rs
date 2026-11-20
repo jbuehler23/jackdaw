@@ -28,7 +28,9 @@ pub use load::{
 pub(crate) use load::{
     clear_scene_entities, despawn_scene_entities, forget_prefab_cache_bump, prefab_cache_epoch,
 };
-pub use registration::{register_entities_in_ast, register_entity_in_ast};
+pub use registration::{
+    register_entities_in_ast, register_entity_in_ast, register_entity_in_ast_with_patches,
+};
 pub use save::{
     SaveOutcome, emit_bsn_scene_for_file, emit_bsn_scene_with_inline_assets, retarget_active_scene,
     save_layout_to_project, save_scene, save_scene_as, save_scene_with_outcome,

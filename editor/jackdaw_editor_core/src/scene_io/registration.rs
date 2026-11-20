@@ -68,6 +68,46 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
     }
 }
 
+/// [`register_entity_in_ast`] for an entity spawned from authored BSN, keeping
+/// the `authored` patches the live entity cannot carry.
+///
+/// Registering reads the node back from the live entity, which only holds the
+/// components the editor registers natively. Project components (and anything
+/// else the editor has no type for) exist only as document data, so without
+/// this they would be dropped from the node, just as loading a scene file
+/// keeps them in the document while the live entity goes without.
+pub fn register_entity_in_ast_with_patches(
+    world: &mut World,
+    entity: Entity,
+    authored: &[jackdaw_bsn::BsnPatch],
+) {
+    register_entity_in_ast(world, entity);
+
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let document_only: Vec<(String, jackdaw_bsn::BsnPatch)> = {
+        let reg = registry.read();
+        let is_native_component = |type_path: &str| {
+            reg.get_with_type_path(type_path)
+                .is_some_and(|registration| registration.data::<ReflectComponent>().is_some())
+        };
+        authored
+            .iter()
+            .filter_map(|patch| {
+                let type_path = jackdaw_bsn::patch_type_path(patch)?;
+                // `Enum::Variant` names the enum's variant, not a type of its own.
+                let enum_base = type_path.rsplit_once("::").map(|(base, _)| base);
+                let native =
+                    is_native_component(type_path) || enum_base.is_some_and(is_native_component);
+                (!native && !should_skip_component(type_path))
+                    .then(|| (type_path.to_string(), patch.clone()))
+            })
+            .collect()
+    };
+    for (type_path, patch) in document_only {
+        crate::commands::upsert_bsn_patch(world, entity, &type_path, patch);
+    }
+}
+
 /// Register multiple ECS entities in the live scene document.
 pub fn register_entities_in_ast(world: &mut World, entities: &[Entity]) {
     for &entity in entities {
