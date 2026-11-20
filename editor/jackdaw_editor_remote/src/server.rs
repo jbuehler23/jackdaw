@@ -750,27 +750,19 @@ impl EditorCommand for ApplyBsn {
         self.parent = self
             .parent
             .map(|parent| jackdaw_editor_core::scene_nodes::live_entity(world, parent));
-        let spawned = match jackdaw_remote::bsn_methods::jackdaw_apply_bsn_handler(
-            bevy::ecs::system::In(Some(self.source.clone())),
-            world,
-        ) {
+        let source = self
+            .source
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let spawned = match jackdaw_remote::bsn_methods::apply_bsn_source(world, source) {
             Ok(spawned) => spawned,
             Err(err) => {
                 self.error = Some(err);
                 return;
             }
         };
-        self.spawned = spawned
-            .get("entities")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_u64)
-                    .filter_map(Entity::try_from_bits)
-                    .collect()
-            })
-            .unwrap_or_default();
+        self.spawned = spawned.iter().map(|node| node.entity).collect();
 
         // Only the roots of the applied source move under `parent`; the rest
         // already carry the `ChildOf` the source spelled, and reparenting them
@@ -786,9 +778,14 @@ impl EditorCommand for ApplyBsn {
 
         // Registering puts the spawned nodes in the document, so they save and
         // appear in the outliner. Parents come first in `spawned`, so a child
-        // finds its parent's node already there.
-        for entity in &self.spawned {
-            jackdaw_editor_core::scene_io::register_entity_in_ast(world, *entity);
+        // finds its parent's node already there. The authored patches go along,
+        // so project components the live entity cannot hold stay in the document.
+        for node in &spawned {
+            jackdaw_editor_core::scene_io::register_entity_in_ast_with_patches(
+                world,
+                node.entity,
+                &node.patches,
+            );
         }
     }
 

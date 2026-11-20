@@ -508,6 +508,42 @@ fn applied_bsn_spawns_every_root_in_the_source() {
     assert!(names.contains(&"Sack".to_string()), "{names:?}");
 }
 
+/// Components the editor has no type for, such as a project's own, stay in the
+/// document. The live entity cannot hold them, so a node read back from it alone
+/// would lose them, and the scene would save without them.
+#[test]
+fn applied_bsn_keeps_components_the_editor_cannot_make_live() {
+    let mut app = editor_with_a_scene();
+
+    let spawned = call(
+        &mut app,
+        apply_bsn_handler,
+        json!({
+            "source": "#Floor\n\
+                bevy_transform::components::transform::Transform\n\
+                my_game::physics::Body::Fixed\n\
+                my_game::physics::Shape::Cuboid { half_extents: glam::Vec3 { x: 7.5, y: 0.5, z: 11.5 } }\n",
+        }),
+    );
+    app.update();
+
+    let entity = Entity::try_from_bits(spawned["entities"][0].as_u64().expect("entity bits"))
+        .expect("a live entity id");
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(entity).expect("the node is in the document");
+    let paths = ast.component_type_paths(node);
+    for wanted in [
+        "bevy_transform::components::transform::Transform",
+        "my_game::physics::Body::Fixed",
+        "my_game::physics::Shape::Cuboid",
+    ] {
+        assert!(
+            paths.iter().any(|path| path == wanted),
+            "{wanted} missing from {paths:?}"
+        );
+    }
+}
+
 /// The tree lists the roots in the order the outliner shows them, which is
 /// the document's order rather than the order they were spawned in.
 #[test]
